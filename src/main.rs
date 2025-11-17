@@ -30,14 +30,14 @@ async fn main() -> Result<()> {
             title, &priority, files, issue, impact, acceptance, effort, context, cli.json,
          )?;
       },
-      Command::Start { bug_ref } => {
-         commands.start(&bug_ref, cli.json)?;
+      Command::Start { bug_ref, branch, no_branch } => {
+         commands.start(&bug_ref, branch, no_branch, cli.json)?;
       },
       Command::Block { bug_ref, reason } => {
          commands.block(&bug_ref, reason, cli.json)?;
       },
-      Command::Close { bug_ref, message } => {
-         commands.close(&bug_ref, message, cli.json)?;
+      Command::Close { bug_ref, message, commit, no_commit } => {
+         commands.close(&bug_ref, message, commit, no_commit, cli.json)?;
       },
       Command::Open { bug_ref } => {
          commands.open(&bug_ref, cli.json)?;
@@ -95,6 +95,12 @@ async fn main() -> Result<()> {
       },
       Command::CriticalPath => {
          commands.critical_path(cli.json)?;
+      },
+      Command::DepsGraph { issue } => {
+         commands.deps_graph(issue.as_deref(), cli.json)?;
+      },
+      Command::Metrics { period } => {
+         commands.metrics(&period, cli.json)?;
       },
       Command::Completions { shell } => {
          let shell_type = match shell.to_lowercase().as_str() {

@@ -53,7 +53,15 @@ pub enum Command {
     },
 
     /// Mark issue as in-progress
-    Start { bug_ref: String },
+    Start {
+        bug_ref: String,
+
+        #[arg(long, help = "Create git branch (overrides config)")]
+        branch: bool,
+
+        #[arg(long, help = "Skip git branch creation (overrides config)")]
+        no_branch: bool,
+    },
 
     /// Mark issue as blocked
     Block {
@@ -69,6 +77,12 @@ pub enum Command {
 
         #[arg(short, long)]
         message: Option<String>,
+
+        #[arg(long, help = "Create git commit (overrides config)")]
+        commit: bool,
+
+        #[arg(long, help = "Skip git commit (overrides config)")]
+        no_commit: bool,
     },
 
     /// Reopen a closed issue
@@ -152,6 +166,18 @@ pub enum Command {
 
     /// Find longest dependency chain (critical path)
     CriticalPath,
+
+    /// Visualize dependency graph as ASCII art
+    DepsGraph {
+        #[arg(long, help = "Show only this issue and its dependencies")]
+        issue: Option<String>,
+    },
+
+    /// Show performance metrics
+    Metrics {
+        #[arg(long, default_value = "week", help = "Time period: day, week, month, all")]
+        period: String,
+    },
 
     /// Generate shell completions
     Completions {

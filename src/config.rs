@@ -16,8 +16,43 @@ pub struct Config {
     #[serde(default)]
     pub issues_location: Option<IssuesLocation>,
 
-    #[serde(default)]
+    #[serde(default = "default_colored_output")]
     pub colored_output: bool,
+
+    #[serde(default = "default_issue_prefix")]
+    pub issue_prefix: String,
+
+    #[serde(default)]
+    pub git_integration: GitIntegration,
+
+    #[serde(default)]
+    pub templates_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitIntegration {
+    #[serde(default)]
+    pub enabled: bool,
+
+    #[serde(default = "default_branch_prefix")]
+    pub branch_prefix: String,
+
+    #[serde(default)]
+    pub commit_prefix_format: Option<String>,
+
+    #[serde(default)]
+    pub auto_branch: bool,
+}
+
+impl Default for GitIntegration {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            branch_prefix: default_branch_prefix(),
+            commit_prefix_format: None,
+            auto_branch: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +75,18 @@ fn default_auto_status() -> bool {
     true
 }
 
+fn default_colored_output() -> bool {
+    true
+}
+
+fn default_issue_prefix() -> String {
+    "ISSUE".to_string()
+}
+
+fn default_branch_prefix() -> String {
+    "issue-".to_string()
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -47,8 +94,18 @@ impl Default for Config {
             default_effort_unit: default_effort_unit(),
             auto_status_detection: true,
             issues_location: None,
-            colored_output: true,
+            colored_output: default_colored_output(),
+            issue_prefix: default_issue_prefix(),
+            git_integration: GitIntegration::default(),
+            templates_dir: None,
         }
+    }
+}
+
+impl Config {
+    /// Get the formatted issue reference (e.g., "ISSUE-1" or "BUG-1")
+    pub fn format_issue_ref(&self, num: u32) -> String {
+        format!("{}-{}", self.issue_prefix, num)
     }
 }
 

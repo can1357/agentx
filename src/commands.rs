@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::git::GitOps;
 use crate::issue::{Issue, Priority, Status};
 use crate::storage::Storage;
 use crate::utils::parse_effort;
@@ -234,6 +235,28 @@ impl Commands {
             _ => anyhow::bail!("Invalid priority: {priority_str}"),
         };
 
+        // Check for similar issues
+        let existing_issues = self.storage.list_open_issues()?;
+        let mut similar = Vec::new();
+
+        for existing in &existing_issues {
+            let similarity = strsim::jaro_winkler(&title.to_lowercase(), &existing.metadata.title.to_lowercase());
+            if similarity > 0.8 {
+                similar.push((existing.metadata.id, &existing.metadata.title, similarity));
+            }
+        }
+
+        // Sort by similarity descending
+        similar.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
+
+        if !similar.is_empty() && !json {
+            eprintln!("\n⚠️  Similar issues found:");
+            for (id, sim_title, score) in similar.iter().take(3) {
+                eprintln!("   #{}: {} ({:.0}% similar)", id, sim_title, score * 100.0);
+            }
+            eprintln!();
+        }
+
         let bug_num = self.storage.next_bug_number()?;
         let issue_obj = Issue::new(
             bug_num, title, priority, files, issue, impact, acceptance, effort, context,
@@ -245,6 +268,13 @@ impl Commands {
             let output = json!({
                 "bug_num": bug_num,
                 "path": path.display().to_string(),
+                "similar_issues": similar.iter().take(3).map(|(id, title, score)| {
+                    json!({
+                        "id": id,
+                        "title": title,
+                        "similarity": score,
+                    })
+                }).collect::<Vec<_>>(),
             });
             println!("{}", serde_json::to_string_pretty(&output)?);
         } else {
@@ -254,22 +284,66 @@ impl Commands {
         Ok(())
     }
 
-    pub fn start(&self, bug_ref: &str, json: bool) -> Result<()> {
+    pub fn start(&self, bug_ref: &str, branch_flag: bool, no_branch_flag: bool, json: bool) -> Result<()> {
         let bug_num = self.storage.resolve_bug_ref(bug_ref)?;
+        let issue = self.storage.load_issue(bug_num)?;
 
         self.storage.update_issue_metadata(bug_num, |meta| {
             meta.status = Status::InProgress;
             meta.started = Some(Utc::now());
         })?;
 
+        // Determine if we should create a branch
+        let should_create_branch = if no_branch_flag {
+            false
+        } else if branch_flag {
+            true
+        } else {
+            self.config.git_integration.enabled && self.config.git_integration.auto_branch
+        };
+
+        let mut branch_created = None;
+
+        if should_create_branch {
+            match GitOps::open(".") {
+                Ok(git) => {
+                    let branch_name = format!(
+                        "{}{}",
+                        self.config.git_integration.branch_prefix,
+                        Storage::slugify(&issue.metadata.title)
+                    );
+
+                    match git.create_branch(&branch_name) {
+                        Ok(_) => {
+                            branch_created = Some(branch_name);
+                        }
+                        Err(e) => {
+                            if !json {
+                                eprintln!("⚠️  Failed to create git branch: {}", e);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    if !json {
+                        eprintln!("⚠️  Not a git repository: {}", e);
+                    }
+                }
+            }
+        }
+
         if json {
             let output = json!({
                 "bug_num": bug_num,
                 "status": "in_progress",
+                "branch_created": branch_created,
             });
             println!("{}", serde_json::to_string_pretty(&output)?);
         } else {
             println!("🔄 BUG-{bug_num} marked as IN PROGRESS");
+            if let Some(branch) = branch_created {
+                println!("🌿 Created git branch: {}", branch);
+            }
         }
 
         Ok(())
@@ -297,7 +371,7 @@ impl Commands {
         Ok(())
     }
 
-    pub fn close(&self, bug_ref: &str, message: Option<String>, json: bool) -> Result<()> {
+    pub fn close(&self, bug_ref: &str, message: Option<String>, commit_flag: bool, no_commit_flag: bool, json: bool) -> Result<()> {
         let bug_num = self.storage.resolve_bug_ref(bug_ref)?;
 
         // Update metadata
@@ -307,7 +381,7 @@ impl Commands {
         })?;
 
         // Add close note if provided
-        if let Some(note) = message {
+        if let Some(note) = &message {
             let mut issue = self.storage.load_issue(bug_num)?;
             let timestamp = Utc::now().format("%Y-%m-%d").to_string();
             issue.body.push_str(&format!("\n\n---\n\n**Closed** ({timestamp}): {note}\n"));
@@ -317,14 +391,77 @@ impl Commands {
         // Move to closed directory
         self.storage.move_issue(bug_num, false)?;
 
+        // Determine if we should create a commit
+        let should_commit = if no_commit_flag {
+            false
+        } else if commit_flag {
+            true
+        } else {
+            self.config.git_integration.enabled && self.config.git_integration.commit_prefix_format.is_some()
+        };
+
+        let mut commit_created = None;
+
+        if should_commit {
+            match GitOps::open(".") {
+                Ok(git) => {
+                    // Check if there are staged changes
+                    match git.has_staged_changes() {
+                        Ok(true) => {
+                            let commit_message = if let Some(ref format) = self.config.git_integration.commit_prefix_format {
+                                let prefix = format.replace("{id}", &bug_num.to_string());
+                                if let Some(msg) = &message {
+                                    format!("{} {}", prefix, msg)
+                                } else {
+                                    format!("{} Close issue", prefix)
+                                }
+                            } else {
+                                message.clone().unwrap_or_else(|| format!("Close BUG-{}", bug_num))
+                            };
+
+                            match git.create_commit(&commit_message) {
+                                Ok(commit_id) => {
+                                    commit_created = Some(commit_id);
+                                }
+                                Err(e) => {
+                                    if !json {
+                                        eprintln!("⚠️  Failed to create git commit: {}", e);
+                                    }
+                                }
+                            }
+                        }
+                        Ok(false) => {
+                            if !json {
+                                eprintln!("⚠️  No staged changes to commit");
+                            }
+                        }
+                        Err(e) => {
+                            if !json {
+                                eprintln!("⚠️  Failed to check git status: {}", e);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    if !json {
+                        eprintln!("⚠️  Not a git repository: {}", e);
+                    }
+                }
+            }
+        }
+
         if json {
             let output = json!({
                 "bug_num": bug_num,
                 "status": "closed",
+                "commit_created": commit_created,
             });
             println!("{}", serde_json::to_string_pretty(&output)?);
         } else {
             println!("✓ BUG-{bug_num} marked as CLOSED");
+            if let Some(commit_id) = commit_created {
+                println!("📝 Created git commit: {}", &commit_id[..8]);
+            }
         }
 
         Ok(())
@@ -1487,6 +1624,348 @@ impl Commands {
                     issue.metadata.priority,
                     issue.metadata.title
                 );
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn deps_graph(&self, focus_issue: Option<&str>, json: bool) -> Result<()> {
+        let issues = self.storage.list_open_issues()?;
+
+        if issues.is_empty() {
+            println!("No open issues found");
+            return Ok(());
+        }
+
+        // Build issue map
+        let issue_map: std::collections::HashMap<u32, &crate::issue::Issue> =
+            issues.iter().map(|i| (i.metadata.id, i)).collect();
+
+        // If focus issue provided, filter to show only that issue and its dependencies
+        let relevant_issues: Vec<u32> = if let Some(ref_str) = focus_issue {
+            let focus_num = self.storage.resolve_bug_ref(ref_str)?;
+            self.get_dependency_closure(focus_num, &issues)
+        } else {
+            issues.iter().map(|i| i.metadata.id).collect()
+        };
+
+        if json {
+            let graph_data: Vec<_> = relevant_issues
+                .iter()
+                .filter_map(|&id| issue_map.get(&id))
+                .map(|issue| {
+                    json!({
+                        "id": issue.metadata.id,
+                        "title": issue.metadata.title,
+                        "status": issue.metadata.status.to_string(),
+                        "depends_on": issue.metadata.depends_on,
+                    })
+                })
+                .collect();
+
+            println!("{}", serde_json::to_string_pretty(&graph_data)?);
+            return Ok(());
+        }
+
+        // ASCII art visualization
+        self.render_ascii_graph(&relevant_issues, &issue_map)?;
+        Ok(())
+    }
+
+    fn get_dependency_closure(&self, root: u32, issues: &[crate::issue::Issue]) -> Vec<u32> {
+        let mut result = std::collections::HashSet::new();
+        let mut to_visit = vec![root];
+
+        while let Some(id) = to_visit.pop() {
+            if result.contains(&id) {
+                continue;
+            }
+            result.insert(id);
+
+            // Add dependencies (what this issue depends on)
+            if let Some(issue) = issues.iter().find(|i| i.metadata.id == id) {
+                for &dep in &issue.metadata.depends_on {
+                    if !result.contains(&dep) {
+                        to_visit.push(dep);
+                    }
+                }
+            }
+
+            // Add dependents (what depends on this issue)
+            for issue in issues {
+                if issue.metadata.depends_on.contains(&id) && !result.contains(&issue.metadata.id)
+                {
+                    to_visit.push(issue.metadata.id);
+                }
+            }
+        }
+
+        let mut vec: Vec<_> = result.into_iter().collect();
+        vec.sort();
+        vec
+    }
+
+    fn render_ascii_graph(
+        &self,
+        issue_ids: &[u32],
+        issue_map: &std::collections::HashMap<u32, &crate::issue::Issue>,
+    ) -> Result<()> {
+        println!("\n{}", "=".repeat(80));
+        println!("DEPENDENCY GRAPH");
+        println!("{}\n", "=".repeat(80));
+
+        // Build layers for topological layout
+        let layers = self.compute_graph_layers(issue_ids, issue_map);
+
+        // Render each layer
+        for (level, layer_issues) in layers.iter().enumerate() {
+            if level > 0 {
+                // Draw arrows between layers
+                for _ in 0..layer_issues.len() {
+                    print!("     │     ");
+                }
+                println!();
+                for _ in 0..layer_issues.len() {
+                    print!("     ▼     ");
+                }
+                println!("\n");
+            }
+
+            // Draw boxes for issues in this layer
+            for &id in layer_issues {
+                if let Some(issue) = issue_map.get(&id) {
+                    let status_marker = issue.metadata.status.marker();
+                    let title = if issue.metadata.title.len() > 20 {
+                        format!("{}...", &issue.metadata.title[..17])
+                    } else {
+                        issue.metadata.title.clone()
+                    };
+
+                    let box_width = 30;
+                    let line1 = format!("┌{}┐", "─".repeat(box_width - 2));
+                    let line2 = format!(
+                        "│ {} #{:<2} {:>20} │",
+                        status_marker,
+                        id,
+                        format!("[{}]", issue.metadata.priority)
+                    );
+                    let line3 = format!("│ {:<28} │", title);
+                    let line4 = format!("└{}┘", "─".repeat(box_width - 2));
+
+                    if self.config.colored_output {
+                        use colored::Colorize;
+                        let colored_box = match issue.metadata.priority {
+                            Priority::Critical => {
+                                format!("{}\n{}\n{}\n{}", line1, line2, line3, line4).red()
+                            }
+                            Priority::High => {
+                                format!("{}\n{}\n{}\n{}", line1, line2, line3, line4).yellow()
+                            }
+                            Priority::Medium => {
+                                format!("{}\n{}\n{}\n{}", line1, line2, line3, line4).normal()
+                            }
+                            Priority::Low => {
+                                format!("{}\n{}\n{}\n{}", line1, line2, line3, line4)
+                                    .bright_black()
+                            }
+                        };
+
+                        if issue.metadata.status == Status::Backlog {
+                            print!("{}", colored_box.dimmed());
+                        } else {
+                            print!("{}", colored_box);
+                        }
+                    } else {
+                        println!("{}", line1);
+                        println!("{}", line2);
+                        println!("{}", line3);
+                        println!("{}", line4);
+                    }
+
+                    // Show what this depends on
+                    if !issue.metadata.depends_on.is_empty() {
+                        let deps_str = issue
+                            .metadata
+                            .depends_on
+                            .iter()
+                            .map(|d| format!("#{}", d))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        println!("  └─> depends on: {}", deps_str);
+                    }
+
+                    println!();
+                }
+            }
+
+            println!();
+        }
+
+        Ok(())
+    }
+
+    fn compute_graph_layers(
+        &self,
+        issue_ids: &[u32],
+        issue_map: &std::collections::HashMap<u32, &crate::issue::Issue>,
+    ) -> Vec<Vec<u32>> {
+        let mut layers: Vec<Vec<u32>> = Vec::new();
+        let mut assigned = std::collections::HashSet::new();
+        let mut remaining: Vec<u32> = issue_ids.to_vec();
+
+        // Assign issues to layers based on dependencies
+        while !remaining.is_empty() {
+            let mut current_layer = Vec::new();
+
+            for &id in &remaining {
+                if let Some(issue) = issue_map.get(&id) {
+                    // Can be in this layer if all dependencies are already assigned
+                    let all_deps_assigned = issue
+                        .metadata
+                        .depends_on
+                        .iter()
+                        .all(|dep| assigned.contains(dep) || !issue_ids.contains(dep));
+
+                    if all_deps_assigned {
+                        current_layer.push(id);
+                    }
+                }
+            }
+
+            if current_layer.is_empty() && !remaining.is_empty() {
+                // Cycle detected, just add all remaining to avoid infinite loop
+                current_layer = remaining.clone();
+            }
+
+            for &id in &current_layer {
+                assigned.insert(id);
+            }
+
+            remaining.retain(|id| !assigned.contains(id));
+            current_layer.sort();
+            layers.push(current_layer);
+        }
+
+        layers
+    }
+
+    pub fn metrics(&self, period: &str, json: bool) -> Result<()> {
+        let open_issues = self.storage.list_open_issues()?;
+        let closed_issues = self.storage.list_closed_issues()?;
+
+        // Determine time period
+        let now = Utc::now();
+        let since = match period {
+            "day" => now - Duration::days(1),
+            "week" => now - Duration::weeks(1),
+            "month" => now - Duration::days(30),
+            "all" => Utc::now() - Duration::days(36500), // ~100 years
+            _ => anyhow::bail!("Invalid period: {}. Use: day, week, month, all", period),
+        };
+
+        // Count closed issues in period
+        let closed_in_period: Vec<_> = closed_issues
+            .iter()
+            .filter(|issue| {
+                if let Some(closed_time) = issue.metadata.closed {
+                    closed_time > since
+                } else {
+                    false
+                }
+            })
+            .collect();
+
+        // Count opened issues in period
+        let opened_in_period: Vec<_> = open_issues
+            .iter()
+            .chain(closed_issues.iter())
+            .filter(|issue| issue.metadata.created > since)
+            .collect();
+
+        // Calculate average time to close
+        let mut close_times = Vec::new();
+        for issue in &closed_in_period {
+            if let (Some(created), Some(closed)) = (Some(issue.metadata.created), issue.metadata.closed) {
+                let duration = closed - created;
+                close_times.push(duration.num_hours());
+            }
+        }
+
+        let avg_close_time = if !close_times.is_empty() {
+            close_times.iter().sum::<i64>() / close_times.len() as i64
+        } else {
+            0
+        };
+
+        // Count by priority
+        let mut priority_counts = HashMap::new();
+        for issue in &open_issues {
+            *priority_counts.entry(issue.metadata.priority).or_insert(0) += 1;
+        }
+
+        // Count by status
+        let mut status_counts = HashMap::new();
+        for issue in &open_issues {
+            *status_counts.entry(issue.metadata.status).or_insert(0) += 1;
+        }
+
+        if json {
+            let output = json!({
+                "period": period,
+                "total_open": open_issues.len(),
+                "total_closed": closed_issues.len(),
+                "opened_in_period": opened_in_period.len(),
+                "closed_in_period": closed_in_period.len(),
+                "avg_close_time_hours": avg_close_time,
+                "by_priority": {
+                    "critical": priority_counts.get(&Priority::Critical).unwrap_or(&0),
+                    "high": priority_counts.get(&Priority::High).unwrap_or(&0),
+                    "medium": priority_counts.get(&Priority::Medium).unwrap_or(&0),
+                    "low": priority_counts.get(&Priority::Low).unwrap_or(&0),
+                },
+                "by_status": {
+                    "not_started": status_counts.get(&Status::NotStarted).unwrap_or(&0),
+                    "in_progress": status_counts.get(&Status::InProgress).unwrap_or(&0),
+                    "blocked": status_counts.get(&Status::Blocked).unwrap_or(&0),
+                    "backlog": status_counts.get(&Status::Backlog).unwrap_or(&0),
+                },
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+            return Ok(());
+        }
+
+        println!("\n{}", "=".repeat(80));
+        println!("PERFORMANCE METRICS - {}", period.to_uppercase());
+        println!("{}\n", "=".repeat(80));
+
+        println!("📊 Overview:");
+        println!("  Total open issues:   {}", open_issues.len());
+        println!("  Total closed issues: {}", closed_issues.len());
+        println!("  Opened in period:    {}", opened_in_period.len());
+        println!("  Closed in period:    {}", closed_in_period.len());
+        println!();
+
+        if avg_close_time > 0 {
+            let days = avg_close_time / 24;
+            let hours = avg_close_time % 24;
+            println!("⏱️  Average time to close: {} days {} hours", days, hours);
+            println!();
+        }
+
+        println!("🎯 By Priority:");
+        for priority in [Priority::Critical, Priority::High, Priority::Medium, Priority::Low] {
+            let count = priority_counts.get(&priority).unwrap_or(&0);
+            if *count > 0 {
+                println!("  {:10} {}", format!("{}:", priority), count);
+            }
+        }
+        println!();
+
+        println!("📋 By Status:");
+        for (status, count) in &status_counts {
+            if *count > 0 {
+                println!("  {:15} {}", format!("{}:", status), count);
             }
         }
 

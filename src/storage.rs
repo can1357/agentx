@@ -122,14 +122,34 @@ impl Storage {
 
         let available = self.list_all_bug_numbers()?;
         if available.is_empty() {
-            anyhow::bail!("BUG-{bug_num} not found. No issues exist yet.")
+            anyhow::bail!("Issue #{bug_num} not found. No issues exist yet.\n\nTip: Use 'agentx list' to see all open issues.")
         } else {
+            // Find closest matches
+            let mut closest: Vec<(u32, i32)> = available
+                .iter()
+                .map(|&n| (n, (n as i32 - bug_num as i32).abs()))
+                .collect();
+            closest.sort_by_key(|(_n, dist)| *dist);
+
+            let suggestions: Vec<String> = closest
+                .iter()
+                .take(3)
+                .map(|(n, _)| format!("#{n}"))
+                .collect();
+
             let available_str = available
                 .iter()
-                .map(|n| format!("BUG-{n}"))
+                .map(|n| format!("#{n}"))
                 .collect::<Vec<_>>()
                 .join(", ");
-            anyhow::bail!("BUG-{bug_num} not found. Available issues: {available_str}")
+
+            anyhow::bail!(
+                "Issue #{bug_num} not found.\n\n\
+                Did you mean:\n  {}\n\n\
+                All issues: {available_str}\n\n\
+                Tip: Use 'agentx list' to see all open issues.",
+                suggestions.join(", ")
+            )
         }
     }
 

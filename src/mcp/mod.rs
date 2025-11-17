@@ -246,7 +246,7 @@ impl IssueTrackerMCP {
       Parameters(request): Parameters<UpdateStatusRequest>,
    ) -> Result<CallToolResult, McpError> {
       let result = match request.status.as_str() {
-         "start" => self.commands.start(&request.bug_ref, true),
+         "start" => self.commands.start(&request.bug_ref, false, false, true),
          "block" => {
             let reason = request.reason.ok_or_else(|| McpError {
                code:    ErrorCode(-32602),
@@ -255,7 +255,7 @@ impl IssueTrackerMCP {
             })?;
             self.commands.block(&request.bug_ref, reason, true)
          },
-         "close" => self.commands.close(&request.bug_ref, request.reason, true),
+         "close" => self.commands.close(&request.bug_ref, request.reason, false, false, true),
          "reopen" => self.commands.open(&request.bug_ref, true),
          "defer" => self.commands.defer(&request.bug_ref, true),
          "activate" => self.commands.activate(&request.bug_ref, true),

@@ -52,7 +52,7 @@ mod datetime_rfc3339_option {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     NotStarted,
@@ -80,10 +80,10 @@ impl Status {
     pub fn marker(&self) -> &'static str {
         match self {
             Self::NotStarted => "⭕",
-            Self::InProgress => "🔄",
+            Self::InProgress => "🟡",
             Self::Blocked => "🚫",
-            Self::Done => "✅",
-            Self::Closed => "✅",
+            Self::Done => "🟢",
+            Self::Closed => "🗑️",
             Self::Backlog => "💤",
         }
     }

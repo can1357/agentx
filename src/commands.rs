@@ -1,7 +1,8 @@
 use crate::issue::{Issue, Priority, Status};
 use crate::storage::Storage;
+use crate::utils::parse_effort;
 use anyhow::{Context, Result};
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -259,6 +260,27 @@ impl Commands {
         let bug_num = self.storage.resolve_bug_ref(bug_ref)?;
         let mut issue = self.storage.load_issue(bug_num)?;
 
+        // Auto-detect status changes from checkpoint message
+        let mut status_changed = false;
+        if note.starts_with("BLOCKED:") || note.to_uppercase().starts_with("BLOCKED:") {
+            let reason = note
+                .strip_prefix("BLOCKED:")
+                .or_else(|| note.strip_prefix("blocked:"))
+                .unwrap_or(&note)
+                .trim()
+                .to_string();
+
+            issue.metadata.status = Status::Blocked;
+            issue.metadata.blocked_reason = Some(reason);
+            status_changed = true;
+        } else if note.starts_with("FIXED:") || note.to_uppercase().starts_with("FIXED:") {
+            issue.metadata.status = Status::Done;
+            status_changed = true;
+        } else if note.starts_with("DONE:") || note.to_uppercase().starts_with("DONE:") {
+            issue.metadata.status = Status::Done;
+            status_changed = true;
+        }
+
         let timestamp = Utc::now().format("%Y-%m-%d %H:%M").to_string();
         let checkpoint = format!("\n\n**Checkpoint** ({timestamp}): {note}");
 
@@ -273,10 +295,15 @@ impl Commands {
                 "bug_num": bug_num,
                 "checkpoint": note,
                 "timestamp": timestamp,
+                "status_changed": status_changed,
+                "new_status": if status_changed { Some(issue.metadata.status.to_string()) } else { None },
             });
             println!("{}", serde_json::to_string_pretty(&output)?);
         } else {
             println!("✓ Added checkpoint to BUG-{bug_num}");
+            if status_changed {
+                println!("  Status updated to: {}", issue.metadata.status);
+            }
         }
 
         Ok(())
@@ -713,6 +740,267 @@ impl Commands {
             println!("{}", serde_json::to_string_pretty(&output)?);
         } else {
             println!("✓ Removed alias: {alias}");
+        }
+
+        Ok(())
+    }
+
+    pub fn quick_wins(&self, threshold: &str, json: bool) -> Result<()> {
+        let threshold_minutes = parse_effort(threshold)?;
+        let issues = self.storage.list_open_issues()?;
+
+        let quick: Vec<_> = issues
+            .iter()
+            .filter(|i| {
+                i.metadata
+                    .effort
+                    .as_ref()
+                    .and_then(|e| parse_effort(e).ok())
+                    .map(|m| m <= threshold_minutes)
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        if json {
+            let data: Vec<_> = quick
+                .iter()
+                .map(|issue| {
+                    json!({
+                        "num": issue.metadata.id,
+                        "title": issue.metadata.title,
+                        "priority": issue.metadata.priority.to_string(),
+                        "effort": issue.metadata.effort,
+                        "files": issue.metadata.files,
+                    })
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&data)?);
+            return Ok(());
+        }
+
+        if quick.is_empty() {
+            println!("No quick wins found (threshold: {threshold})");
+            return Ok(());
+        }
+
+        println!("\n{}", "=".repeat(80));
+        println!(
+            "QUICK WINS - {} tasks ≤ {threshold}",
+            quick.len()
+        );
+        println!("{}\n", "=".repeat(80));
+
+        for issue in quick {
+            let marker = issue.metadata.status.marker();
+            let priority_label = format!("[{}]", issue.metadata.priority.to_string().to_uppercase());
+            let effort = issue.metadata.effort.as_deref().unwrap_or("?");
+
+            println!(
+                "{} {:10} ({:>5}) BUG-{}: {}",
+                marker, priority_label, effort, issue.metadata.id, issue.metadata.title
+            );
+
+            if !issue.metadata.files.is_empty() {
+                println!(
+                    "          Files: {}",
+                    issue.metadata.files.join(", ")
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn bulk_start(&self, bug_refs: Vec<String>, json: bool) -> Result<()> {
+        let mut results = Vec::new();
+        let mut errors = Vec::new();
+
+        for bug_ref in bug_refs {
+            match self.storage.resolve_bug_ref(&bug_ref) {
+                Ok(bug_num) => {
+                    if let Err(e) = self.storage.update_issue_metadata(bug_num, |meta| {
+                        meta.status = Status::InProgress;
+                        meta.started = Some(Utc::now());
+                    }) {
+                        errors.push((bug_ref, e.to_string()));
+                    } else {
+                        results.push(bug_num);
+                    }
+                }
+                Err(e) => {
+                    errors.push((bug_ref, e.to_string()));
+                }
+            }
+        }
+
+        if json {
+            let output = json!({
+                "started": results,
+                "errors": errors,
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        } else {
+            if !results.is_empty() {
+                println!("🔄 Started {} issues:", results.len());
+                for bug_num in &results {
+                    println!("   BUG-{bug_num}");
+                }
+            }
+
+            if !errors.is_empty() {
+                println!("\n❌ Errors:");
+                for (bug_ref, error) in &errors {
+                    println!("   {bug_ref}: {error}");
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn bulk_close(&self, bug_refs: Vec<String>, message: Option<String>, json: bool) -> Result<()> {
+        let mut results = Vec::new();
+        let mut errors = Vec::new();
+
+        for bug_ref in bug_refs {
+            match self.storage.resolve_bug_ref(&bug_ref) {
+                Ok(bug_num) => {
+                    // Update metadata
+                    if let Err(e) = self.storage.update_issue_metadata(bug_num, |meta| {
+                        meta.status = Status::Closed;
+                        meta.closed = Some(Utc::now());
+                    }) {
+                        errors.push((bug_ref.clone(), e.to_string()));
+                        continue;
+                    }
+
+                    // Add close note if provided
+                    if let Some(note) = &message {
+                        if let Ok(mut issue) = self.storage.load_issue(bug_num) {
+                            let timestamp = Utc::now().format("%Y-%m-%d").to_string();
+                            issue.body.push_str(&format!("\n\n---\n\n**Closed** ({timestamp}): {note}\n"));
+                            if let Err(e) = self.storage.save_issue(&issue, true) {
+                                errors.push((bug_ref.clone(), e.to_string()));
+                                continue;
+                            }
+                        }
+                    }
+
+                    // Move to closed directory
+                    if let Err(e) = self.storage.move_issue(bug_num, false) {
+                        errors.push((bug_ref, e.to_string()));
+                    } else {
+                        results.push(bug_num);
+                    }
+                }
+                Err(e) => {
+                    errors.push((bug_ref, e.to_string()));
+                }
+            }
+        }
+
+        if json {
+            let output = json!({
+                "closed": results,
+                "errors": errors,
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        } else {
+            if !results.is_empty() {
+                println!("✓ Closed {} issues:", results.len());
+                for bug_num in &results {
+                    println!("   BUG-{bug_num}");
+                }
+            }
+
+            if !errors.is_empty() {
+                println!("\n❌ Errors:");
+                for (bug_ref, error) in &errors {
+                    println!("   {bug_ref}: {error}");
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn summary(&self, hours: Option<u64>, json: bool) -> Result<()> {
+        let hours = hours.unwrap_or(24);
+        let since = Utc::now() - Duration::hours(hours as i64);
+
+        let all_issues = self.storage.list_open_issues()?;
+        let closed_issues = self.storage.list_closed_issues()?;
+
+        let mut started = Vec::new();
+        let mut closed = Vec::new();
+        let mut checkpointed = Vec::new();
+
+        // Check open issues for recent activity
+        for issue in &all_issues {
+            if let Some(started_time) = issue.metadata.started {
+                if started_time > since {
+                    started.push(issue);
+                }
+            }
+
+            // Check for recent checkpoints in body
+            if issue.body.contains("**Checkpoint**") {
+                // Simple heuristic: if body contains checkpoint, include it
+                checkpointed.push(issue);
+            }
+        }
+
+        // Check closed issues
+        for issue in &closed_issues {
+            if let Some(closed_time) = issue.metadata.closed {
+                if closed_time > since {
+                    closed.push(issue);
+                }
+            }
+        }
+
+        if json {
+            let output = json!({
+                "since": since.to_rfc3339(),
+                "hours": hours,
+                "started": started.iter().map(|i| i.metadata.id).collect::<Vec<_>>(),
+                "closed": closed.iter().map(|i| i.metadata.id).collect::<Vec<_>>(),
+                "checkpointed": checkpointed.iter().map(|i| i.metadata.id).collect::<Vec<_>>(),
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+            return Ok(());
+        }
+
+        println!("\n{}", "=".repeat(80));
+        println!("SESSION SUMMARY - Last {hours} hours");
+        println!("{}\n", "=".repeat(80));
+
+        if !started.is_empty() {
+            println!("🔄 Started ({}):", started.len());
+            for issue in &started {
+                println!("   BUG-{}: {}", issue.metadata.id, issue.metadata.title);
+            }
+            println!();
+        }
+
+        if !closed.is_empty() {
+            println!("✅ Closed ({}):", closed.len());
+            for issue in &closed {
+                println!("   BUG-{}: {}", issue.metadata.id, issue.metadata.title);
+            }
+            println!();
+        }
+
+        if !checkpointed.is_empty() {
+            println!("📝 Checkpointed ({}):", checkpointed.len());
+            for issue in &checkpointed {
+                println!("   BUG-{}: {}", issue.metadata.id, issue.metadata.title);
+            }
+            println!();
+        }
+
+        if started.is_empty() && closed.is_empty() && checkpointed.is_empty() {
+            println!("No activity in the last {hours} hours");
         }
 
         Ok(())

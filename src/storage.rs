@@ -1,5 +1,6 @@
 use crate::issue::{Issue, IssueMetadata};
 use anyhow::{Context, Result};
+use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs;
@@ -9,6 +10,15 @@ const ISSUES_DIR: &str = "issues";
 const OPEN_DIR: &str = "issues/open";
 const CLOSED_DIR: &str = "issues/closed";
 const ALIASES_FILE: &str = "issues/.aliases.yaml";
+
+static FRONTMATTER_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?s)^---\s*\n(.*?)\n---\s*\n(.*)").unwrap());
+
+static BUG_NUMBER_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\d+)-").unwrap());
+
+static FILENAME_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\d+)-.*\.mdx?$").unwrap());
+
+static SLUG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[^a-zA-Z0-9]+").unwrap());
 
 pub struct Storage {
     base_dir: PathBuf,
@@ -69,9 +79,7 @@ impl Storage {
     }
 
     pub fn parse_mdx(&self, content: &str) -> Result<(IssueMetadata, String)> {
-        let re = Regex::new(r"(?s)^---\s*\n(.*?)\n---\s*\n(.*)").unwrap();
-
-        if let Some(caps) = re.captures(content) {
+        if let Some(caps) = FRONTMATTER_RE.captures(content) {
             let yaml_text = &caps[1];
             let body = caps[2].to_string();
 
@@ -106,7 +114,19 @@ impl Storage {
             }
         }
 
-        anyhow::bail!("BUG-{bug_num} not found")
+        let available = self.list_all_bug_numbers()?;
+        if available.is_empty() {
+            anyhow::bail!("BUG-{bug_num} not found. No issues exist yet.")
+        } else {
+            let available_str = available
+                .iter()
+                .map(|n| format!("BUG-{n}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            anyhow::bail!(
+                "BUG-{bug_num} not found. Available issues: {available_str}"
+            )
+        }
     }
 
     pub fn load_issue(&self, bug_num: u32) -> Result<Issue> {
@@ -130,7 +150,7 @@ impl Storage {
                     let name = entry.file_name();
                     let name_str = name.to_string_lossy();
 
-                    if let Some(caps) = Regex::new(r"^(\d+)-")?.captures(&name_str) {
+                    if let Some(caps) = BUG_NUMBER_RE.captures(&name_str) {
                         if let Ok(num) = caps[1].parse::<u32>() {
                             max_num = max_num.max(num);
                         }
@@ -143,9 +163,8 @@ impl Storage {
     }
 
     pub fn slugify(title: &str) -> String {
-        let re = Regex::new(r"[^a-zA-Z0-9]+").unwrap();
         let lower = title.trim().to_lowercase();
-        let slug = re.replace_all(&lower, "-");
+        let slug = SLUG_RE.replace_all(&lower, "-");
         slug.trim_matches('-').to_string()
     }
 
@@ -207,14 +226,13 @@ impl Storage {
         }
 
         let mut issues = Vec::new();
-        let re = Regex::new(r"^(\d+)-.*\.mdx?$").unwrap();
 
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
 
-            if re.captures(&name_str).is_some() {
+            if FILENAME_RE.is_match(&name_str) {
                 let content = fs::read_to_string(entry.path())?;
                 let (metadata, body) = self.parse_mdx(&content)?;
                 issues.push(Issue { metadata, body });
@@ -223,5 +241,31 @@ impl Storage {
 
         issues.sort_by_key(|issue| issue.metadata.id);
         Ok(issues)
+    }
+
+    pub fn list_all_bug_numbers(&self) -> Result<Vec<u32>> {
+        let mut bug_nums = Vec::new();
+
+        for dir in [self.open_dir(), self.closed_dir()] {
+            if !dir.exists() {
+                continue;
+            }
+
+            if let Ok(entries) = fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name();
+                    let name_str = name.to_string_lossy();
+
+                    if let Some(caps) = BUG_NUMBER_RE.captures(&name_str) {
+                        if let Ok(num) = caps[1].parse::<u32>() {
+                            bug_nums.push(num);
+                        }
+                    }
+                }
+            }
+        }
+
+        bug_nums.sort_unstable();
+        Ok(bug_nums)
     }
 }

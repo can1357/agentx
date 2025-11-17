@@ -2,6 +2,56 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+mod datetime_rfc3339 {
+    use chrono::{DateTime, Utc};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(date: &DateTime<Utc>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&date.to_rfc3339())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        DateTime::parse_from_rfc3339(&s)
+            .map(|dt| dt.with_timezone(&Utc))
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+mod datetime_rfc3339_option {
+    use chrono::{DateTime, Utc};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(date: &Option<DateTime<Utc>>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match date {
+            Some(dt) => serializer.serialize_str(&dt.to_rfc3339()),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<DateTime<Utc>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let opt = Option::<String>::deserialize(deserializer)?;
+        match opt {
+            Some(s) => DateTime::parse_from_rfc3339(&s)
+                .map(|dt| Some(dt.with_timezone(&Utc)))
+                .map_err(serde::de::Error::custom),
+            None => Ok(None),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
@@ -73,7 +123,7 @@ pub struct IssueMetadata {
     pub title: String,
     pub priority: Priority,
     pub status: Status,
-    #[serde(with = "chrono::serde::ts_seconds")]
+    #[serde(with = "datetime_rfc3339")]
     pub created: DateTime<Utc>,
     pub files: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -82,7 +132,7 @@ pub struct IssueMetadata {
     pub context: Option<String>,
     #[serde(
         skip_serializing_if = "Option::is_none",
-        with = "chrono::serde::ts_seconds_option",
+        with = "datetime_rfc3339_option",
         default
     )]
     pub started: Option<DateTime<Utc>>,
@@ -90,10 +140,14 @@ pub struct IssueMetadata {
     pub blocked_reason: Option<String>,
     #[serde(
         skip_serializing_if = "Option::is_none",
-        with = "chrono::serde::ts_seconds_option",
+        with = "datetime_rfc3339_option",
         default
     )]
     pub closed: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub depends_on: Vec<u32>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub blocks: Vec<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -126,6 +180,8 @@ impl Issue {
             started: None,
             blocked_reason: None,
             closed: None,
+            depends_on: Vec::new(),
+            blocks: Vec::new(),
         };
 
         let mut body = format!("# BUG-{id}: {title}\n\n");

@@ -103,6 +103,32 @@ pub enum Command {
         #[command(subcommand)]
         action: AliasAction,
     },
+
+    /// Show agent usage guide
+    Guide,
+
+    /// Show quick wins (low-effort tasks)
+    QuickWins {
+        #[arg(long, default_value = "1h")]
+        threshold: String,
+    },
+
+    /// Start multiple issues at once
+    BulkStart { bug_refs: Vec<String> },
+
+    /// Close multiple issues at once
+    BulkClose {
+        bug_refs: Vec<String>,
+
+        #[arg(short, long)]
+        message: Option<String>,
+    },
+
+    /// Show session summary (what changed recently)
+    Summary {
+        #[arg(long, help = "Hours to look back (default: 24)")]
+        hours: Option<u64>,
+    },
 }
 
 #[derive(Subcommand)]

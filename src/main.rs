@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::Parser;
 use issues::cli::{AliasAction, Cli, Command};
 use issues::commands::Commands;
+use issues::guide;
 use issues::storage::Storage;
 use std::env;
 
@@ -74,6 +75,21 @@ fn main() -> Result<()> {
                 commands.alias_remove(&alias, cli.json)?;
             }
         },
+        Command::Guide => {
+            guide::print_guide();
+        }
+        Command::QuickWins { threshold } => {
+            commands.quick_wins(&threshold, cli.json)?;
+        }
+        Command::BulkStart { bug_refs } => {
+            commands.bulk_start(bug_refs, cli.json)?;
+        }
+        Command::BulkClose { bug_refs, message } => {
+            commands.bulk_close(bug_refs, message, cli.json)?;
+        }
+        Command::Summary { hours } => {
+            commands.summary(hours, cli.json)?;
+        }
     }
 
     Ok(())

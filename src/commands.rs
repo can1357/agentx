@@ -6,6 +6,7 @@ use chrono::{Duration, Utc};
 use serde_json::json;
 use std::collections::HashMap;
 
+#[derive(Debug, Clone)]
 pub struct Commands {
     storage: Storage,
 }

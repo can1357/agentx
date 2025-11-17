@@ -3,10 +3,12 @@ use clap::Parser;
 use issues::cli::{AliasAction, Cli, Command};
 use issues::commands::Commands;
 use issues::guide;
+use issues::mcp::IssueTrackerMCP;
 use issues::storage::Storage;
 use std::env;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
     let current_dir = env::current_dir()?;
     let storage = Storage::new(current_dir);
@@ -89,6 +91,9 @@ fn main() -> Result<()> {
         }
         Command::Summary { hours } => {
             commands.summary(hours, cli.json)?;
+        }
+        Command::Serve => {
+            IssueTrackerMCP::serve_stdio().await?;
         }
     }
 

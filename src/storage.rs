@@ -1,25 +1,31 @@
 use crate::issue::{Issue, IssueMetadata};
 use anyhow::{Context, Result};
-use once_cell::sync::Lazy;
 use regex::Regex;
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::{collections::HashMap, sync::LazyLock};
 
 const ISSUES_DIR: &str = "issues";
 const OPEN_DIR: &str = "issues/open";
 const CLOSED_DIR: &str = "issues/closed";
 const ALIASES_FILE: &str = "issues/.aliases.yaml";
 
-static FRONTMATTER_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?s)^---\s*\n(.*?)\n---\s*\n(.*)").unwrap());
+macro_rules! static_regex {
+    ($(static $name:ident: Regex = $regex:expr;)*) => {
+        $(
+            static $name: LazyLock<Regex> = LazyLock::new(|| Regex::new($regex).unwrap());
+        )*
+    };
+}
 
-static BUG_NUMBER_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\d+)-").unwrap());
+static_regex! {
+    static FRONTMATTER_RE: Regex = r"(?s)^---\s*\n(.*?)\n---\s*\n(.*)";
+    static BUG_NUMBER_RE: Regex = r"^(\d+)-";
+    static FILENAME_RE: Regex = r"^(\d+)-.*\.mdx?$";
+    static SLUG_RE: Regex = r"[^a-zA-Z0-9]+";
+}
 
-static FILENAME_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\d+)-.*\.mdx?$").unwrap());
-
-static SLUG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[^a-zA-Z0-9]+").unwrap());
-
+#[derive(Debug, Clone)]
 pub struct Storage {
     base_dir: PathBuf,
 }
@@ -83,8 +89,8 @@ impl Storage {
             let yaml_text = &caps[1];
             let body = caps[2].to_string();
 
-            let metadata: IssueMetadata = serde_yaml::from_str(yaml_text)
-                .context("Failed to parse YAML frontmatter")?;
+            let metadata: IssueMetadata =
+                serde_yaml::from_str(yaml_text).context("Failed to parse YAML frontmatter")?;
 
             Ok((metadata, body))
         } else {
@@ -123,9 +129,7 @@ impl Storage {
                 .map(|n| format!("BUG-{n}"))
                 .collect::<Vec<_>>()
                 .join(", ");
-            anyhow::bail!(
-                "BUG-{bug_num} not found. Available issues: {available_str}"
-            )
+            anyhow::bail!("BUG-{bug_num} not found. Available issues: {available_str}")
         }
     }
 

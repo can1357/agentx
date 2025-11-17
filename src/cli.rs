@@ -129,6 +129,9 @@ pub enum Command {
         #[arg(long, help = "Hours to look back (default: 24)")]
         hours: Option<u64>,
     },
+
+    /// Start MCP server on stdio
+    Serve,
 }
 
 #[derive(Subcommand)]

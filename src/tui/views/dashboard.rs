@@ -25,6 +25,8 @@ pub struct DashboardView<'a> {
    column_scroll_state: [usize; 5],
    search_query:        Option<&'a str>,
    search_count:        Option<(usize, usize)>,
+   sort_by:             Option<&'a str>,
+   filter_by:           Option<&'a str>,
 }
 
 impl<'a> DashboardView<'a> {
@@ -40,6 +42,8 @@ impl<'a> DashboardView<'a> {
          column_scroll_state: [0; 5],
          search_query: None,
          search_count: None,
+         sort_by: None,
+         filter_by: None,
       }
    }
 
@@ -63,6 +67,12 @@ impl<'a> DashboardView<'a> {
    pub fn search_state(mut self, query: Option<&'a str>, count: Option<(usize, usize)>) -> Self {
       self.search_query = query;
       self.search_count = count;
+      self
+   }
+
+   pub fn sort_filter_state(mut self, sort: Option<&'a str>, filter: Option<&'a str>) -> Self {
+      self.sort_by = sort;
+      self.filter_by = filter;
       self
    }
 
@@ -140,37 +150,47 @@ impl<'a> DashboardView<'a> {
    }
 
    fn render_footer(&self, area: Rect, buf: &mut Buffer) {
-      let footer = if self.search_query.is_some() {
-         Line::from(vec![
+      let mut footer_spans = if self.search_query.is_some() {
+         vec![
             Span::raw("  "),
             Span::styled("[Search Mode]", self.theme.title_style()),
             Span::raw("  "),
             Span::styled("↑↓/Tab", self.theme.dim_style()),
             Span::raw(" Next/Prev  "),
             Span::styled("Enter", self.theme.dim_style()),
-            Span::raw(" Jump & Continue  "),
+            Span::raw(" Jump  "),
             Span::styled("Esc", self.theme.dim_style()),
             Span::raw(" Cancel"),
-         ])
+         ]
       } else {
-         Line::from(vec![
+         vec![
             Span::raw("  "),
-            Span::styled("↑↓←→/hjkl", self.theme.dim_style()),
+            Span::styled("↑↓/hjkl", self.theme.dim_style()),
             Span::raw(" Nav  "),
-            Span::styled("PgUp/Dn", self.theme.dim_style()),
-            Span::raw(" Scroll  "),
-            Span::styled("g/G", self.theme.dim_style()),
-            Span::raw(" Top/End  "),
             Span::styled("/", self.theme.dim_style()),
             Span::raw(" Search  "),
-            Span::styled("Tab", self.theme.dim_style()),
-            Span::raw(" Panes  "),
+            Span::styled("F2", self.theme.dim_style()),
+            Span::raw(" Filter  "),
+            Span::styled("F3", self.theme.dim_style()),
+            Span::raw(" Sort  "),
+            Span::styled("Alt+1-5", self.theme.dim_style()),
+            Span::raw(" Jump  "),
             Span::styled("q", self.theme.dim_style()),
             Span::raw(" Quit"),
-         ])
+         ]
       };
 
-      Paragraph::new(footer)
+      if let Some(sort) = self.sort_by {
+         footer_spans.push(Span::raw("  "));
+         footer_spans.push(Span::styled(format!("📊 {}", sort), self.theme.warning()));
+      }
+
+      if let Some(filter) = self.filter_by {
+         footer_spans.push(Span::raw("  "));
+         footer_spans.push(Span::styled(format!("🔍 {}", filter), self.theme.success()));
+      }
+
+      Paragraph::new(Line::from(footer_spans))
          .style(self.theme.dim_style())
          .render(area, buf);
    }

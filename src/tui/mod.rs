@@ -33,7 +33,17 @@ pub struct App {
    search_query:        String,
    search_results:      Vec<(usize, usize)>,
    current_search_idx:  usize,
+   sort_mode:           SortMode,
+   filter_priority:     Option<String>,
    should_quit:         bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SortMode {
+   Status,
+   Priority,
+   Effort,
+   Created,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +72,8 @@ impl App {
          search_query: String::new(),
          search_results: Vec::new(),
          current_search_idx: 0,
+         sort_mode: SortMode::Status,
+         filter_priority: None,
          should_quit: false,
       })
    }
@@ -142,6 +154,17 @@ impl App {
                }
             }
          },
+         Action::JumpToStatus(status_idx) => {
+            if self.current_view == ViewMode::Dashboard && self.selected_pane == 0 {
+               self.jump_to_status_section(status_idx);
+            }
+         },
+         Action::Sort => {
+            self.cycle_sort_mode();
+         },
+         Action::Filter => {
+            self.cycle_filter_priority();
+         },
          _ => {},
       }
 
@@ -162,11 +185,53 @@ impl App {
       let mut result = Vec::new();
 
       for (status, status_name) in &statuses {
-         let issues: Vec<_> = self
+         let mut issues: Vec<_> = self
             .issues
             .iter()
             .filter(|i| i.issue.metadata.status == *status)
             .collect();
+
+         if let Some(ref priority_filter) = self.filter_priority {
+            issues.retain(|i| i.issue.metadata.priority.to_string() == *priority_filter);
+         }
+
+         if self.sort_mode != SortMode::Status {
+            issues.sort_by(|a, b| match self.sort_mode {
+               SortMode::Priority => {
+                  let priority_order = |p: &str| match p {
+                     "Critical" => 0,
+                     "High" => 1,
+                     "Medium" => 2,
+                     "Low" => 3,
+                     _ => 4,
+                  };
+                  priority_order(&a.issue.metadata.priority.to_string())
+                     .cmp(&priority_order(&b.issue.metadata.priority.to_string()))
+               },
+               SortMode::Effort => {
+                  let effort_hours = |e: &Option<smol_str::SmolStr>| {
+                     e.as_ref()
+                        .and_then(|s| {
+                           let s = s.as_str();
+                           if s.ends_with('h') {
+                              s.trim_end_matches('h').parse::<u32>().ok()
+                           } else if s.ends_with('d') {
+                              s.trim_end_matches('d').parse::<u32>().map(|d| d * 8).ok()
+                           } else if s.ends_with('w') {
+                              s.trim_end_matches('w').parse::<u32>().map(|w| w * 40).ok()
+                           } else {
+                              None
+                           }
+                        })
+                        .unwrap_or(0)
+                  };
+                  effort_hours(&a.issue.metadata.effort)
+                     .cmp(&effort_hours(&b.issue.metadata.effort))
+               },
+               SortMode::Created => a.issue.metadata.created.cmp(&b.issue.metadata.created),
+               SortMode::Status => std::cmp::Ordering::Equal,
+            });
+         }
 
          if !issues.is_empty() {
             result.push((None, status_name.to_string()));
@@ -235,6 +300,50 @@ impl App {
 
    fn move_selection_horizontal(&mut self, _delta: i32) {
       // Not used in unified list view
+   }
+
+   fn jump_to_status_section(&mut self, status_idx: usize) {
+      use crate::issue::Status;
+
+      let target_status = match status_idx {
+         0 => Status::Backlog,
+         1 => Status::NotStarted,
+         2 => Status::InProgress,
+         3 => Status::Blocked,
+         4 => Status::Done,
+         _ => return,
+      };
+
+      let all_items = self.all_issues_flattened();
+      for (idx, (issue_opt, _)) in all_items.iter().enumerate() {
+         if let Some(issue) = issue_opt
+            && issue.issue.metadata.status == target_status
+         {
+            self.selected_item = idx;
+            self.column_scroll_state[self.selected_column] = 0;
+            self.update_scroll_for_item();
+            break;
+         }
+      }
+   }
+
+   fn cycle_sort_mode(&mut self) {
+      self.sort_mode = match self.sort_mode {
+         SortMode::Status => SortMode::Priority,
+         SortMode::Priority => SortMode::Effort,
+         SortMode::Effort => SortMode::Created,
+         SortMode::Created => SortMode::Status,
+      };
+   }
+
+   fn cycle_filter_priority(&mut self) {
+      self.filter_priority = match &self.filter_priority {
+         None => Some("Critical".to_string()),
+         Some(p) if p == "Critical" => Some("High".to_string()),
+         Some(p) if p == "High" => Some("Medium".to_string()),
+         Some(p) if p == "Medium" => Some("Low".to_string()),
+         _ => None,
+      };
    }
 
    fn handle_search_key(&mut self, key: KeyEvent) -> Result<()> {
@@ -360,11 +469,22 @@ impl App {
                   } else {
                      (None, None)
                   };
+
+                  let sort_info = match self.sort_mode {
+                     SortMode::Status => None,
+                     SortMode::Priority => Some("Priority"),
+                     SortMode::Effort => Some("Effort"),
+                     SortMode::Created => Some("Created"),
+                  };
+
+                  let filter_info = self.filter_priority.as_deref();
+
                   let dashboard = DashboardView::new(&self.issues, self.theme, &self.config)
                      .selected_pane(self.selected_pane)
                      .selection(self.selected_column, self.selected_item)
                      .scroll_state(self.scroll_offset, self.column_scroll_state)
-                     .search_state(search_query, search_count);
+                     .search_state(search_query, search_count)
+                     .sort_filter_state(sort_info, filter_info);
                   f.render_widget(dashboard, size);
                },
                ViewMode::Kanban => {

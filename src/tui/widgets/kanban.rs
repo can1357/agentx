@@ -169,14 +169,32 @@ impl Widget for KanbanBoard<'_> {
 
                Some(ListItem::new(lines).style(style))
             } else {
+               let status_style = match status_name.as_str() {
+                  "BACKLOG" => self.theme.dim_style().add_modifier(Modifier::BOLD),
+                  "READY" => self
+                     .theme
+                     .normal_style()
+                     .fg(self.theme.success())
+                     .add_modifier(Modifier::BOLD),
+                  "IN PROGRESS" => self
+                     .theme
+                     .normal_style()
+                     .fg(self.theme.warning())
+                     .add_modifier(Modifier::BOLD),
+                  "BLOCKED" => self
+                     .theme
+                     .normal_style()
+                     .fg(self.theme.error())
+                     .add_modifier(Modifier::BOLD),
+                  "DONE" => self.theme.status_done().add_modifier(Modifier::BOLD),
+                  _ => self.theme.title_style().add_modifier(Modifier::BOLD),
+               };
+
                let mut lines = Vec::new();
                lines.push(Line::from(""));
                lines.push(Line::from(vec![
                   Span::raw("  "),
-                  Span::styled(
-                     format!("━━━ {} ━━━", status_name),
-                     self.theme.title_style().add_modifier(Modifier::BOLD),
-                  ),
+                  Span::styled(format!("━━━ {} ━━━", status_name), status_style),
                ]));
                lines.push(Line::from(""));
 

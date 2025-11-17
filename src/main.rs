@@ -242,7 +242,7 @@ async fn main() -> Result<()> {
       Command::Activate { bug_ref } => {
          commands.activate(&bug_ref, cli.json)?;
       },
-      Command::Dash => {
+      Command::Ui => {
          let dashboard_storage = Storage::new(issues_dir);
          agentx::tui::launch_dashboard(dashboard_storage)?;
       },

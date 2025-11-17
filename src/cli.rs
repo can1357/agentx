@@ -18,6 +18,7 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Command {
    /// List issues
+   #[command(alias = "ls")]
    List {
       #[arg(long, default_value = "open")]
       status: SmolStr,
@@ -30,6 +31,7 @@ pub enum Command {
    Show { bug_ref: SmolStr },
 
    /// Create a new issue (use -i for interactive mode)
+   #[command(alias = "add")]
    New {
       #[arg(long)]
       title: Option<SmolStr>,
@@ -213,7 +215,8 @@ pub enum Command {
    Serve,
 
    /// Launch interactive TUI dashboard
-   Dash,
+   #[command(alias = "dash")]
+   Ui,
 }
 
 #[derive(Subcommand)]

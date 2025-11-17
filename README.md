@@ -1,437 +1,420 @@
-# AgentX - AI-Native Issue Tracker
+# AgentX
 
-Structured task/bug tracking optimized for agentic workflows. A high-performance Rust CLI with MCP server integration, interactive TUI dashboard, dependency management, and velocity metrics.
+> **AI-native issue tracker** designed for developers who live in the terminal.
 
-## Features
+Fast, keyboard-driven issue tracking with dependency graphs, TUI dashboard, and MCP server integration.
 
-### Core Tracking
-- **Structured issues**: Track concrete, actionable work items with metadata
-- **Priority management**: Critical, high, medium, low priorities
-- **Status tracking**: open, active, blocked, done, closed, backlog
-- **Effort estimation**: Tag issues with time estimates (30m, 2h, 1d, etc.)
-- **MDX storage**: Issues stored as MDX files with human-readable YAML frontmatter (RFC3339 timestamps)
+![TUI Dashboard](./screenshot.png)
 
-### Advanced Features
-- **MCP Server**: First-class AI agent integration via Model Context Protocol
-- **Dependency Management**: Track issue dependencies with cycle detection
-- **Interactive TUI**: Real-time dashboard with kanban board, dependency graph, and velocity metrics
-- **Git Integration**: Auto-create branches, track commits, detect stale work
-- **Metrics Tracking**: Velocity charts (pts/day), burndown tracking, completion stats
-- **Backlog Management**: Defer/activate issues to manage scope
-- **Aliasing**: Use memorable names instead of bug numbers
-- **Context Commands**: Quick overview of active work, blockers, priorities
-- **Bulk Operations**: Start or close multiple issues at once
-- **Auto-status Detection**: Checkpoint messages can auto-update issue status
-- **Shell Completion**: Bash, zsh, fish support
+---
 
-## Installation
+## ✨ Features
+
+### 🎯 Core Issue Management
+
+- **Create & Track**: Issues with status, priority, effort estimates, tags, and dependencies
+- **Smart Workflows**: Automatic state transitions (Backlog → Ready → In Progress → Done)
+- **Quick Actions**: Bulk operations, checkpoints, context switching
+- **Fuzzy Search**: Find issues by partial ID, title, or tags
+
+### 📊 Visualization & Analytics
+
+- **TUI Dashboard**: Full-screen interactive interface (Jira-style unified list)
+- **Dependency Graphs**: ASCII art visualization of issue relationships
+- **Critical Path**: Find bottlenecks in your dependency chain
+- **Metrics**: Track completion rates, velocity, and burndown
+
+### 🤖 AI Integration
+
+- **MCP Server**: Expose issue tracker via Model Context Protocol
+- **Agent-Friendly**: Structured data, JSON output, semantic operations
+- **Context Awareness**: Focus on relevant issues, show what's blocked
+
+### 🔧 Developer Experience
+
+- **Git Integration**: Auto-detect branch context, commit references
+- **Interactive Mode**: Guided wizards for complex operations
+- **Shell Completions**: Bash, Zsh, Fish support
+- **Zero Config**: Works out of the box, stores in `~/.local/share/agentx`
+
+## 🎨 TUI Dashboard
+
+The interactive dashboard provides a Jira-like experience in your terminal:
+
+### Features
+
+- ✅ **Unified List**: All issues in one scrollable view
+- ✅ **Live Search**: Type `/` and start searching instantly
+- ✅ **Status Dividers**: Clear visual separation between states
+- ✅ **Priority Icons**: 🔴 Critical, 🟡 High, 🟢 Medium, ⚪ Low
+- ✅ **Tag Display**: See all tags inline
+- ✅ **Effort Estimates**: Track time commitments
+- ✅ **Vim Keybindings**: `hjkl` navigation + search
+
+---
+
+## 🚀 Quick Start
+
+### Installation
 
 ```bash
+# Clone and build
+git clone https://github.com/can1357/agentx.git
+cd agentx
 cargo build --release
+
+# Install to PATH
 cargo install --path .
-
-# Generate shell completions
-agentx completion bash > /etc/bash_completion.d/agentx
-agentx completion zsh > /usr/local/share/zsh/site-functions/_agentx
-agentx completion fish > ~/.config/fish/completions/agentx.fish
 ```
 
-## Quick Start
+### Create Your First Issue
 
 ```bash
-# See agent usage guide
-agentx guide
+# Quick create
+agentx new "Fix authentication bug" -p high -e 2d -t bug -t security
 
-# Launch interactive TUI dashboard
-agentx tui
-
-# Create an issue with dependencies
-agentx new \
-  --title "Fix authentication bug" \
-  --priority high \
-  --effort "2h" \
-  --file src/auth.rs \
-  --depends-on 5 \
-  --issue "Users cannot login after password reset" \
-  --impact "Blocks user re-authentication flow" \
-  --acceptance "Users can login successfully after password reset"
-
-# Check your current work context
-agentx context
-
-# Start working (auto-creates git branch if configured)
-agentx start 1
-
-# Add progress notes (supports auto-status detection)
-agentx checkpoint 1 "Implemented password reset flow"
-agentx checkpoint 1 "BLOCKED: Waiting for security review"  # Auto-blocks issue
-agentx checkpoint 1 "FIXED: All tests passing"  # Auto-marks as done
-
-# Close when done
-agentx close 1 -m "Fixed by updating auth token generation"
+# Interactive mode
+agentx new -i
 ```
 
-## MCP Server
-
-AgentX includes a built-in MCP server for AI agent integration:
+### Launch the TUI Dashboard
 
 ```bash
-# Start MCP server (stdio transport)
-agentx serve
+agentx ui
+# or use the alias:
+agentx dash
 ```
 
-### Available MCP Tools
+**Navigation:**
 
-- `issues/context` - Get current work context (active, blocked, high-priority tasks)
-- `issues/create` - Create new issues with full metadata
-- `issues/update_status` - Change issue status (start, block, done, close, reopen)
-- `issues/show` - Show full issue details in MDX format
-- `issues/query` - Advanced filtering by status, priority, effort, files
-- `issues/checkpoint` - Add timestamped progress notes
-- `issues/dependencies` - Manage issue dependencies with cycle detection
+- `↑↓` or `jk` - Navigate issues
+- `/` - Search (live results)
+- `g`/`G` - Jump to top/bottom
+- `PgUp`/`PgDn` - Scroll faster
+- `Tab` - Switch panes
+- `q` - Quit
 
-### Claude Desktop Configuration
+---
 
-Add to `claude_desktop_config.json`:
+## 📖 Command Reference
 
-```json
-{
-  "mcpServers": {
-    "agentx": {
-      "command": "/path/to/agentx",
-      "args": ["serve"]
-    }
-  }
-}
-```
-
-See [MCP_SERVER.md](./MCP_SERVER.md) for detailed documentation.
-
-## Interactive TUI
-
-Launch the terminal dashboard:
+### Issue Lifecycle
 
 ```bash
-agentx tui
-```
-
-Features:
-- **Kanban board**: Backlog, Ready, Active, Blocked, Done columns
-- **Dependency graph**: Visual tree of issue dependencies
-- **Metrics panel**: Real-time velocity (pts/day), burndown tracking
-- **Live updates**: Reflects changes as you work
-
-## Commands Reference
-
-### Issue Management
-
-```bash
-# Create issues
-agentx new --title "..." --priority high --effort 2h --issue "..." --impact "..." --acceptance "..."
-
-# List and view
-agentx list                    # List open issues
-agentx list --status closed    # List closed issues
-agentx show 1                  # Show full details
-agentx show --json 1          # JSON output
+# Create new issue
+agentx new "Task description" [OPTIONS]
+# or use the alias:
+agentx add "Task description" [OPTIONS]
+  -p, --priority <critical|high|medium|low>
+  -e, --effort <duration>     # e.g., "2d", "4h", "1w"
+  -t, --tag <tag>             # Can be used multiple times
+  -d, --depends <ID>          # Add dependency
+  -i, --interactive           # Launch wizard
 
 # Update status
-agentx start 1                 # Mark as active
-agentx block 1 --reason "..."  # Mark as blocked
-agentx close 1 -m "..."        # Close with message
-agentx open 1                  # Reopen closed issue
-agentx checkpoint 1 "note"     # Add progress note
+agentx start <ID>             # Mark as in-progress
+agentx block <ID> <reason>    # Mark as blocked
+agentx close <ID>             # Mark as done
+agentx defer <ID>             # Move to backlog
+agentx activate <ID>          # Activate from backlog
 
-# Bulk operations
-agentx bulk-start 1 2 3
-agentx bulk-close 1 2 3 -m "Completed during sprint"
+# View issues
+agentx list                   # All open issues
+# or use the alias:
+agentx ls                     # All open issues
+agentx show <ID>              # Full details
+agentx context                # Current work context
+agentx focus                  # Top priorities
+agentx blocked                # All blocked issues
+agentx ready                  # Ready to start
+agentx quick-wins             # Low-effort tasks
 ```
 
 ### Dependencies
 
 ```bash
-# Add dependency (1 depends on 5)
-agentx depends add 1 5
+# Add dependency
+agentx depend add <ID> <depends-on>
 
 # Remove dependency
-agentx depends remove 1 5
+agentx depend remove <ID> <depends-on>
 
-# Show dependency tree
-agentx depends tree 1
+# Visualize graph
+agentx deps-graph [ID]        # ASCII art
+agentx dependencies <ID>      # Show deps + dependents
 
-# List dependents (what depends on this?)
-agentx depends list 1
-
-# Validate all dependencies (check for cycles)
-agentx depends validate
+# Find bottlenecks
+agentx critical-path          # Longest dependency chain
 ```
 
-### Backlog Management
+### Tags & Organization
 
 ```bash
-# Move to backlog
-agentx defer 1
+# Add tags
+agentx tag add <ID> <tag>
 
-# Activate from backlog
-agentx activate 1
+# Remove tags
+agentx tag remove <ID> <tag>
+
+# List by tag (in list command)
+agentx list -t backend -t api
 ```
 
-### Context & Focus
+### Bulk Operations
 
 ```bash
-agentx context        # Current work context
-agentx focus          # Top priority tasks
-agentx blocked        # All blocked tasks
-agentx ready          # Tasks ready to start
-agentx quick-wins     # Low-effort tasks (≤1h)
-agentx quick-wins --threshold 30m
+# Start multiple issues
+agentx bulk-start <ID1> <ID2> <ID3>
+
+# Close multiple issues
+agentx bulk-close <ID1> <ID2> <ID3>
 ```
 
-### Metrics & Reporting
+### Analytics
 
 ```bash
-agentx metrics        # Show velocity, burndown, completion stats
-agentx summary        # Recent activity (last 24h)
-agentx summary --hours 8
-```
-
-### Aliases
-
-```bash
-agentx alias add 1 auth-bug
-agentx alias list
-agentx alias remove auth-bug
-
-# Use aliases anywhere
-agentx show auth-bug
-agentx start auth-bug
-```
-
-### Configuration
-
-```bash
-# Show current config
-agentx config show
-
-# Edit config file
-agentx config edit
-
-# Set values
-agentx config set git.auto_branch true
-agentx config set git.branch_prefix "feature/"
-```
-
-Config file location: `.agentx.toml`
-
-Example:
-```toml
-[git]
-auto_branch = true
-branch_prefix = "bug/"
-auto_commit = false
-
-[metrics]
-velocity_window_days = 14
-track_time = true
-```
-
-### Import/Export
-
-```bash
-# Import from YAML
-agentx import --file issues.yaml
-
-# Export active issues
-agentx list --json > export.json
-```
-
-## File Structure
-
-```
-.agentx.toml            # Configuration
-issues/
-├── open/
-│   ├── 01-fix-auth-bug.mdx
-│   └── 02-add-validation.mdx
-├── closed/
-│   └── 00-initial-setup.mdx
-└── .aliases.yaml
-```
-
-## Issue Format
-
-```mdx
----
-id: 1
-title: Fix authentication bug
-priority: high
-status: active
-created: 2025-11-17T09:44:00.448771488+00:00
-files:
-  - src/auth.rs
-effort: 2h
-started: 2025-11-17T09:45:12.123456789+00:00
-depends_on: [5]
----
-
-# BUG-1: Fix authentication bug
-
-**Issue**: Users cannot login after password reset
-
-**Impact**: Blocks user re-authentication flow
-
-**Acceptance**: Users can login successfully after password reset
-
-**Checkpoint** (2025-11-17 09:47): Completed initial investigation
-**Checkpoint** (2025-11-17 10:15): Implemented password reset flow
-```
-
-## Status Values
-
-- `open` - Not started yet (was `not_started`)
-- `active` - Currently being worked on (was `in_progress`)
-- `blocked` - Blocked by external dependency
-- `done` - Work completed, needs verification
-- `closed` - Verified and archived
-- `backlog` - Deferred for later
-
-## Auto-Status Detection
-
-Checkpoint messages automatically update issue status:
-
-- `BLOCKED: <reason>` → Sets status to blocked with reason
-- `FIXED: <note>` → Sets status to done
-- `DONE: <note>` → Sets status to done
-
-```bash
-agentx checkpoint 1 "BLOCKED: Waiting for security review"
-# Output: ✓ Added checkpoint to BUG-1
-#         Status updated to: blocked
-```
-
-## Effort Estimation
-
-Supported formats:
-- Short: `30m`, `2h`, `1d`
-- Decimal: `1.5h`, `0.5d`
-- Long: `2 hours`, `30 minutes`, `1 day`
-
-Used by:
-- `quick-wins` command
-- Velocity metrics (converts to story points)
-- Burndown tracking
-
-## Performance Benefits
-
-- **Fast startup**: No interpreter overhead (~2ms)
-- **Compiled regexes**: Pattern matching compiled once
-- **Efficient I/O**: Zero-copy operations
-- **Parallel potential**: Rust's zero-cost concurrency
-- **Small binary**: Single ~3MB executable
-
-Perfect for agent workflows calling the CLI hundreds of times per session.
-
-## Workflow Examples
-
-### Starting a Session
-
-```bash
-# Quick context
-agentx context
-
-# Or launch TUI dashboard
-agentx tui
-
-# See top priorities
-agentx focus
-
-# Find quick tasks
-agentx quick-wins
-```
-
-### Working on Issues
-
-```bash
-# Start (auto-creates git branch if configured)
-agentx start 1
-
-# Add progress notes
-agentx checkpoint 1 "Implemented password reset flow"
-
-# Block if needed
-agentx checkpoint 1 "BLOCKED: Waiting for security review"
-```
-
-### Tracking Progress
-
-```bash
-# View metrics
+# Show metrics
 agentx metrics
 
-# See recent activity
+# Recent changes
 agentx summary
 
-# Check dependency graph
-agentx depends tree
+# Issue counts by status
+agentx list --json | jq '.[] | .metadata.status' | sort | uniq -c
 ```
 
-### Managing Dependencies
+---
+
+## 🔌 MCP Server
+
+AgentX can run as an MCP server for AI assistant integration:
 
 ```bash
-# Issue 10 depends on 5 and 7
-agentx depends add 10 5
-agentx depends add 10 7
-
-# Show what 10 depends on
-agentx depends tree 10
-
-# Show what depends on 5
-agentx depends list 5
-
-# Validate no cycles
-agentx depends validate
+# Start server on stdio
+agentx serve
 ```
 
-## Best Practices for AI Agents
+### Available Tools
 
-1. **Session start**: Run `agentx context` to load work state
-2. **Before working**: Run `agentx show <num>` for full context
-3. **During work**: Use `agentx checkpoint` with descriptive notes
-4. **Status changes**: Use prefixes (`BLOCKED:`, `FIXED:`) for auto-status
-5. **Dependencies**: Track blockers with `depends add`
-6. **Quick wins**: Use `agentx quick-wins` for small tasks
-7. **Bulk updates**: Use `bulk-start`/`bulk-close` for batches
-8. **MCP integration**: Use MCP tools for structured access
+The MCP server exposes these operations to AI assistants:
 
-## Architecture
+| Tool             | Description                            |
+| ---------------- | -------------------------------------- |
+| `create_issue`   | Create new issue with metadata         |
+| `list_issues`    | Query issues by status/priority/tags   |
+| `update_issue`   | Change status, add tags, update fields |
+| `show_issue`     | Get full details of specific issue     |
+| `add_dependency` | Link issues together                   |
+| `get_blocked`    | Find all blocked issues                |
+| `get_ready`      | Find issues ready to start             |
 
-- **CLI**: `clap` for argument parsing
-- **Storage**: File-based MDX with YAML frontmatter
-- **Serialization**: `serde` + `serde_yaml` + RFC3339 timestamps
-- **MCP Server**: `rmcp` SDK with `tokio` async runtime
-- **TUI**: `ratatui` for terminal UI
-- **Git**: `git2` for repository operations
-- **Metrics**: In-memory aggregation with file-based history
+### Example Claude Desktop Config
 
-## Development
+```json
+{
+  "mcpServers": {
+    "agentx": {
+      "command": "agentx",
+      "args": ["serve"],
+      "env": {}
+    }
+  }
+}
+```
+
+---
+
+## 🛠️ Advanced Usage
+
+### Import from YAML
 
 ```bash
-# Build
-cargo build --release
+# Bulk import issues
+agentx import issues.yaml
+```
 
+**Format:**
+
+```yaml
+issues:
+  - title: "Setup CI/CD pipeline"
+    priority: high
+    effort: "1w"
+    tags: ["devops", "infrastructure"]
+    depends_on: []
+  - title: "Write integration tests"
+    priority: medium
+    effort: "3d"
+    tags: ["testing"]
+    depends_on: ["BUG-123"]
+```
+
+### Alias Management
+
+```bash
+# Create short aliases for long IDs
+agentx alias add auth BUG-123
+agentx show auth              # Same as: agentx show BUG-123
+
+# List aliases
+agentx alias list
+```
+
+### Checkpoints
+
+Track progress within a single issue:
+
+```bash
+# Add checkpoint
+agentx checkpoint BUG-123 "Completed database migration"
+agentx checkpoint BUG-123 "Updated API endpoints"
+
+# View in issue details
+agentx show BUG-123
+```
+
+### JSON Output
+
+All commands support JSON output for scripting:
+
+```bash
+# Get JSON output
+agentx list --json | jq '.[] | select(.metadata.priority == "Critical")'
+
+# Count issues by status
+agentx list --json | jq 'group_by(.metadata.status) | map({status: .[0].metadata.status, count: length})'
+```
+
+---
+
+## 📁 Project Structure
+
+```
+agentx/
+├── src/
+│   ├── main.rs           # CLI entrypoint
+│   ├── issue.rs          # Core issue types
+│   ├── storage.rs        # File-based persistence
+│   ├── commands/         # CLI commands
+│   ├── tui/              # Dashboard UI
+│   │   ├── mod.rs        # App state & event loop
+│   │   ├── widgets/      # Kanban, graphs, charts
+│   │   └── views/        # Dashboard layout
+│   ├── mcp/              # MCP server
+│   └── utils/            # Helpers
+├── data/                 # Issue storage (auto-created)
+├── Cargo.toml
+└── README.md
+```
+
+**Data Location:** `~/.local/share/agentx/`
+
+---
+
+## 🎯 Workflow Examples
+
+### Daily Workflow
+
+```bash
+# Morning: Check context
+agentx focus                  # What's important today?
+agentx context                # What am I working on?
+
+# Start working
+agentx start BUG-123
+agentx checkpoint BUG-123 "Initial investigation complete"
+
+# Found blocker
+agentx block BUG-123 "Waiting for DB migration approval"
+
+# Switch to quick win
+agentx quick-wins
+agentx start DOC-45
+
+# End of day
+agentx close DOC-45
+agentx summary                # What did I accomplish?
+```
+
+### Planning a Feature
+
+```bash
+# Create feature breakdown
+agentx new "API authentication layer" -p high -e 2w -t api
+agentx new "Add JWT token generation" -p high -e 3d -t api -d FEA-100
+agentx new "Implement token refresh" -p medium -e 2d -t api -d FEA-101
+agentx new "Add rate limiting" -p low -e 1d -t api -d FEA-101
+
+# Visualize dependencies
+agentx deps-graph FEA-100
+
+# Find critical path
+agentx critical-path
+```
+
+### Bug Triage
+
+```bash
+# Import bugs from file
+agentx import bugs.yaml
+
+# Review critical issues
+agentx list -p critical
+
+# Launch dashboard for triage
+agentx dash
+
+# (In dashboard: use / to search, mark priorities)
+```
+
+---
+
+## 🔧 Configuration
+
+AgentX uses sensible defaults but can be customized:
+
+```bash
+# Initialize config
+agentx init
+
+# Location: ~/.config/agentx/config.yaml
+```
+
+**Example config.yaml:**
+
+```yaml
+# Issue ID format
+id_prefix: "TASK"
+id_start: 1
+
+# Default values
+defaults:
+  priority: medium
+  effort: null
+  tags: []
+
+# TUI theme
+theme:
+  name: "default"
+```
+
+---
+
+## 🧪 Testing
+
+```bash
 # Run tests
 cargo test
 
-# Format
-cargo fmt
+# Run with logging
+RUST_LOG=debug agentx dash
 
-# Lint
-cargo clippy
-
-# Run locally
-cargo run -- <command>
+# Check performance
+hyperfine 'agentx list'
 ```
 
-## License
+---
 
-MIT
+## 📜 License
+
+MIT License - see LICENSE file for details.

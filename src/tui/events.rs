@@ -57,6 +57,7 @@ pub enum Action {
    Delete,
    NextPane,
    PrevPane,
+   JumpToStatus(usize),
    SwitchView(ViewMode),
    None,
 }
@@ -108,6 +109,13 @@ pub fn key_to_action(key: KeyEvent) -> Action {
       KeyCode::Char('n') => Action::New,
       KeyCode::Char('e') => Action::Edit,
       KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => Action::Delete,
+
+      // Status jumps (Alt+1 through Alt+5)
+      KeyCode::Char('1') if key.modifiers.contains(KeyModifiers::ALT) => Action::JumpToStatus(0),
+      KeyCode::Char('2') if key.modifiers.contains(KeyModifiers::ALT) => Action::JumpToStatus(1),
+      KeyCode::Char('3') if key.modifiers.contains(KeyModifiers::ALT) => Action::JumpToStatus(2),
+      KeyCode::Char('4') if key.modifiers.contains(KeyModifiers::ALT) => Action::JumpToStatus(3),
+      KeyCode::Char('5') if key.modifiers.contains(KeyModifiers::ALT) => Action::JumpToStatus(4),
 
       // View switching (only when not using modifiers)
       KeyCode::Char('1')

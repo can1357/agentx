@@ -217,6 +217,12 @@ pub enum Command {
    /// Launch interactive TUI dashboard
    #[command(alias = "dash")]
    Ui,
+
+   /// Install MCP server configuration for supported clients
+   Install {
+      #[arg(long, help = "Uninstall MCP server configuration")]
+      uninstall: bool,
+   },
 }
 
 #[derive(Subcommand)]

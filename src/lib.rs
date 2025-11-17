@@ -4,6 +4,7 @@ pub mod config;
 pub mod fuzzy;
 pub mod git;
 pub mod guide;
+pub mod installer;
 pub mod interactive;
 pub mod issue;
 pub mod mcp;

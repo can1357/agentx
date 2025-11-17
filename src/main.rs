@@ -246,6 +246,9 @@ async fn main() -> Result<()> {
          let dashboard_storage = Storage::new(issues_dir);
          agentx::tui::launch_dashboard(dashboard_storage)?;
       },
+      Command::Install { uninstall } => {
+         agentx::installer::install_mcp_servers(uninstall)?;
+      },
    }
 
    Ok(())

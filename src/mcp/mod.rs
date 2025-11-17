@@ -1,488 +1,586 @@
-use crate::commands::Commands;
-use crate::issue::{Priority, Status};
-use crate::storage::Storage;
+use std::{borrow::Cow, sync::Arc};
+
 use anyhow::Result;
 use rmcp::{
-    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{
-        CallToolResult, Content, ErrorCode, ErrorData as McpError, Implementation,
-        ProtocolVersion, ServerCapabilities, ServerInfo,
-    },
-    tool, tool_handler, tool_router, ServiceExt, ServerHandler,
+   RoleServer, ServerHandler, ServiceExt,
+   handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+   model::{
+      Annotated, CallToolResult, Content, ErrorCode, ErrorData as McpError, Implementation,
+      ListResourcesResult, PaginatedRequestParam, ProtocolVersion, RawResource,
+      ReadResourceRequestParam, ReadResourceResult, ResourceContents, ServerCapabilities,
+      ServerInfo,
+   },
+   service::RequestContext,
+   tool, tool_handler, tool_router,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
-use std::borrow::Cow;
-use std::sync::Arc;
+
+use crate::{
+   commands::Commands,
+   issue::{Priority, Status},
+   storage::Storage,
+};
 
 // Tool parameter structures
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ContextRequest {
-    #[schemars(description = "Output format: 'summary', 'detailed', or 'json'")]
-    pub format: Option<String>,
+   #[schemars(description = "Output format: 'summary', 'detailed', or 'json'")]
+   pub format: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CreateIssueRequest {
-    #[schemars(description = "Issue title")]
-    pub title: String,
-    #[schemars(description = "Priority: 'critical', 'high', 'medium', or 'low'")]
-    pub priority: Option<String>,
-    #[schemars(description = "Files related to this issue")]
-    pub files: Option<Vec<String>>,
-    #[schemars(description = "Description of the issue/problem")]
-    pub issue: String,
-    #[schemars(description = "Impact of the issue")]
-    pub impact: String,
-    #[schemars(description = "Acceptance criteria for completion")]
-    pub acceptance: String,
-    #[schemars(description = "Effort estimate (e.g., '30m', '2h', '1d')")]
-    pub effort: Option<String>,
-    #[schemars(description = "Additional context")]
-    pub context: Option<String>,
+   #[schemars(description = "Issue title")]
+   pub title:      String,
+   #[schemars(description = "Priority: 'critical', 'high', 'medium', or 'low'")]
+   pub priority:   Option<String>,
+   #[schemars(description = "Files related to this issue")]
+   pub files:      Option<Vec<String>>,
+   #[schemars(description = "Description of the issue/problem")]
+   pub issue:      String,
+   #[schemars(description = "Impact of the issue")]
+   pub impact:     String,
+   #[schemars(description = "Acceptance criteria for completion")]
+   pub acceptance: String,
+   #[schemars(description = "Effort estimate (e.g., '30m', '2h', '1d')")]
+   pub effort:     Option<String>,
+   #[schemars(description = "Additional context")]
+   pub context:    Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct UpdateStatusRequest {
-    #[schemars(description = "Bug reference (number or alias)")]
-    pub bug_ref: String,
-    #[schemars(description = "New status: 'start', 'block', 'done', 'close', or 'reopen'")]
-    pub status: String,
-    #[schemars(description = "Reason (required for 'block', optional for 'close')")]
-    pub reason: Option<String>,
+   #[schemars(description = "Bug reference (number or alias)")]
+   pub bug_ref: String,
+   #[schemars(description = "New status: 'start', 'block', 'done', 'close', or 'reopen'")]
+   pub status:  String,
+   #[schemars(description = "Reason (required for 'block', optional for 'close')")]
+   pub reason:  Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ShowRequest {
-    #[schemars(description = "Bug reference (number or alias)")]
-    pub bug_ref: String,
+   #[schemars(description = "Bug reference (number or alias)")]
+   pub bug_ref: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CheckpointRequest {
-    #[schemars(description = "Bug reference (number or alias)")]
-    pub bug_ref: String,
-    #[schemars(description = "Progress note/checkpoint message")]
-    pub message: String,
+   #[schemars(description = "Bug reference (number or alias)")]
+   pub bug_ref: String,
+   #[schemars(description = "Progress note/checkpoint message")]
+   pub message: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct QuickWinsRequest {
-    #[schemars(description = "Effort threshold (e.g., '30m', '1h', '2h'). Default: '1h'")]
-    pub threshold: Option<String>,
+   #[schemars(description = "Effort threshold (e.g., '30m', '1h', '2h'). Default: '1h'")]
+   pub threshold: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct QueryRequest {
-    #[schemars(description = "Filter by status: 'not_started', 'in_progress', 'blocked', 'done'")]
-    pub status: Option<String>,
-    #[schemars(description = "Filter by priority: 'critical', 'high', 'medium', 'low'")]
-    pub priority: Option<String>,
-    #[schemars(description = "Filter by maximum effort (e.g., '2h')")]
-    pub max_effort: Option<String>,
-    #[schemars(description = "Filter by file path (contains match)")]
-    pub file_contains: Option<String>,
-    #[schemars(description = "Maximum number of results")]
-    pub limit: Option<usize>,
+   #[schemars(description = "Filter by status: 'not_started', 'in_progress', 'blocked', 'done'")]
+   pub status:        Option<String>,
+   #[schemars(description = "Filter by priority: 'critical', 'high', 'medium', 'low'")]
+   pub priority:      Option<String>,
+   #[schemars(description = "Filter by maximum effort (e.g., '2h')")]
+   pub max_effort:    Option<String>,
+   #[schemars(description = "Filter by file path (contains match)")]
+   pub file_contains: Option<String>,
+   #[schemars(description = "Maximum number of results")]
+   pub limit:         Option<usize>,
 }
 
 #[derive(Debug, Clone)]
 pub struct IssueTrackerMCP {
-    commands: Arc<Commands>,
-    storage: Arc<Storage>,
-    tool_router: ToolRouter<Self>,
+   commands:    Arc<Commands>,
+   storage:     Arc<Storage>,
+   tool_router: ToolRouter<Self>,
 }
 
 #[tool_router]
 impl IssueTrackerMCP {
-    pub fn new(storage: Storage, commands: Commands) -> Self {
-        Self {
-            commands: Arc::new(commands),
-            storage: Arc::new(storage),
-            tool_router: Self::tool_router(),
-        }
-    }
+   pub fn new(storage: Storage, commands: Commands) -> Self {
+      Self {
+         commands:    Arc::new(commands),
+         storage:     Arc::new(storage),
+         tool_router: Self::tool_router(),
+      }
+   }
 
-    pub async fn serve_stdio() -> Result<()> {
-        let storage = Storage::new(".");
-        let commands = Commands::new(storage.clone());
-        let service = Self::new(storage, commands);
+   pub async fn serve_stdio() -> Result<()> {
+      let storage = Storage::new(".");
+      let commands = Commands::new(storage.clone());
+      let service = Self::new(storage, commands);
 
-        let server = service.serve(rmcp::transport::stdio()).await?;
-        server.waiting().await?;
+      let server = service.serve(rmcp::transport::stdio()).await?;
+      server.waiting().await?;
 
-        Ok(())
-    }
+      Ok(())
+   }
 
-    #[tool(description = "Get current work context - in-progress, blocked, and priority tasks")]
-    async fn issues_context(
-        &self,
-        Parameters(_request): Parameters<ContextRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        let issues = self.storage.list_open_issues().map_err(|e| McpError {
-            code: ErrorCode(-32603),
-            message: Cow::from(format!("Failed to list issues: {}", e)),
-            data: None,
-        })?;
+   #[tool(
+      name = "issues/context",
+      description = "Get current work context - in-progress, blocked, and priority tasks"
+   )]
+   async fn context(
+      &self,
+      Parameters(_request): Parameters<ContextRequest>,
+   ) -> Result<CallToolResult, McpError> {
+      let issues = self.storage.list_open_issues().map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to list issues: {}", e)),
+         data:    None,
+      })?;
 
-        let mut in_progress = vec![];
-        let mut blocked = vec![];
-        let mut high_priority = vec![];
+      let mut in_progress = vec![];
+      let mut blocked = vec![];
+      let mut high_priority = vec![];
 
-        for issue in &issues {
-            match issue.metadata.status {
-                Status::InProgress => in_progress.push(&issue.metadata),
-                Status::Blocked => blocked.push(&issue.metadata),
-                Status::NotStarted => {
-                    if matches!(
-                        issue.metadata.priority,
-                        Priority::Critical | Priority::High
-                    ) {
-                        high_priority.push(&issue.metadata);
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        let json_output = serde_json::json!({
-            "in_progress": in_progress.iter().map(|m| serde_json::json!({
-                "num": m.id,
-                "title": m.title,
-                "priority": m.priority.to_string(),
-            })).collect::<Vec<_>>(),
-            "blocked": blocked.iter().map(|m| serde_json::json!({
-                "num": m.id,
-                "title": m.title,
-                "reason": m.blocked_reason,
-            })).collect::<Vec<_>>(),
-            "high_priority": high_priority.iter().map(|m| serde_json::json!({
-                "num": m.id,
-                "title": m.title,
-                "priority": m.priority.to_string(),
-            })).collect::<Vec<_>>(),
-            "total_open": issues.len(),
-        });
-
-        Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&json_output).unwrap(),
-        )]))
-    }
-
-    #[tool(description = "Create a new issue/task")]
-    async fn issues_create(
-        &self,
-        Parameters(request): Parameters<CreateIssueRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        let priority_str = request.priority.as_deref().unwrap_or("medium");
-
-        match self.commands.create_issue(
-            request.title,
-            priority_str,
-            request.files.unwrap_or_default(),
-            request.issue,
-            request.impact,
-            request.acceptance,
-            request.effort,
-            request.context,
-            true,
-        ) {
-            Ok(_) => {
-                let bug_num = self.storage.next_bug_number().map_err(|e| McpError {
-                    code: ErrorCode(-32603),
-                    message: Cow::from(format!("Failed to get bug number: {}", e)),
-                    data: None,
-                })? - 1;
-
-                let result = serde_json::json!({
-                    "bug_num": bug_num,
-                    "message": format!("Created BUG-{}", bug_num),
-                });
-
-                Ok(CallToolResult::success(vec![Content::text(
-                    serde_json::to_string_pretty(&result).unwrap(),
-                )]))
-            }
-            Err(e) => Err(McpError {
-                code: ErrorCode(-32603),
-                message: Cow::from(format!("Failed to create issue: {}", e)),
-                data: None,
-            }),
-        }
-    }
-
-    #[tool(description = "Update issue status (start, block, done, close, reopen)")]
-    async fn issues_update_status(
-        &self,
-        Parameters(request): Parameters<UpdateStatusRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        let result = match request.status.as_str() {
-            "start" => self.commands.start(&request.bug_ref, true),
-            "block" => {
-                let reason = request.reason.ok_or_else(|| McpError {
-                    code: ErrorCode(-32602),
-                    message: Cow::from("Block status requires a reason"),
-                    data: None,
-                })?;
-                self.commands.block(&request.bug_ref, reason, true)
-            }
-            "close" => self.commands.close(&request.bug_ref, request.reason, true),
-            "reopen" => self.commands.open(&request.bug_ref, true),
-            _ => {
-                return Err(McpError {
-                    code: ErrorCode(-32602),
-                    message: Cow::from(format!("Invalid status: {}", request.status)),
-                    data: None,
-                })
-            }
-        };
-
-        result
-            .map(|_| {
-                CallToolResult::success(vec![Content::text(
-                    serde_json::json!({
-                        "success": true,
-                        "status": request.status,
-                    })
-                    .to_string(),
-                )])
-            })
-            .map_err(|e| McpError {
-                code: ErrorCode(-32603),
-                message: Cow::from(format!("Failed to update status: {}", e)),
-                data: None,
-            })
-    }
-
-    #[tool(description = "Show full issue details")]
-    async fn issues_show(
-        &self,
-        Parameters(request): Parameters<ShowRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        let bug_num = self
-            .storage
-            .resolve_bug_ref(&request.bug_ref)
-            .map_err(|e| McpError {
-                code: ErrorCode(-32602),
-                message: Cow::from(format!("Invalid bug ref: {}", e)),
-                data: None,
-            })?;
-
-        let issue = self.storage.load_issue(bug_num).map_err(|e| McpError {
-            code: ErrorCode(-32603),
-            message: Cow::from(format!("Failed to load issue: {}", e)),
-            data: None,
-        })?;
-
-        Ok(CallToolResult::success(vec![Content::text(
-            issue.to_mdx(),
-        )]))
-    }
-
-    #[tool(description = "Add checkpoint/progress note to an issue")]
-    async fn issues_checkpoint(
-        &self,
-        Parameters(request): Parameters<CheckpointRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        self.commands
-            .checkpoint(&request.bug_ref, request.message.clone(), true)
-            .map_err(|e| McpError {
-                code: ErrorCode(-32603),
-                message: Cow::from(format!("Failed to add checkpoint: {}", e)),
-                data: None,
-            })?;
-
-        let bug_num = self
-            .storage
-            .resolve_bug_ref(&request.bug_ref)
-            .map_err(|e| McpError {
-                code: ErrorCode(-32602),
-                message: Cow::from(format!("Invalid bug ref: {}", e)),
-                data: None,
-            })?;
-
-        let result = serde_json::json!({
-            "success": true,
-            "bug_num": bug_num,
-            "message": request.message,
-        });
-
-        Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&result).unwrap(),
-        )]))
-    }
-
-    #[tool(description = "Find quick-win tasks under effort threshold")]
-    async fn issues_quick_wins(
-        &self,
-        Parameters(request): Parameters<QuickWinsRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        let threshold = request.threshold.as_deref().unwrap_or("1h");
-
-        let threshold_minutes = crate::utils::parse_effort(threshold).map_err(|e| McpError {
-            code: ErrorCode(-32602),
-            message: Cow::from(format!("Invalid threshold: {}", e)),
-            data: None,
-        })?;
-
-        let issues = self.storage.list_open_issues().map_err(|e| McpError {
-            code: ErrorCode(-32603),
-            message: Cow::from(format!("Failed to list issues: {}", e)),
-            data: None,
-        })?;
-
-        let quick: Vec<_> = issues
-            .iter()
-            .filter(|i| {
-                i.metadata
-                    .effort
-                    .as_ref()
-                    .and_then(|e| crate::utils::parse_effort(e).ok())
-                    .map(|m| m <= threshold_minutes)
-                    .unwrap_or(false)
-            })
-            .map(|issue| {
-                serde_json::json!({
-                    "num": issue.metadata.id,
-                    "title": issue.metadata.title,
-                    "priority": issue.metadata.priority.to_string(),
-                    "effort": issue.metadata.effort,
-                    "status": issue.metadata.status.to_string(),
-                    "files": issue.metadata.files,
-                })
-            })
-            .collect();
-
-        let result = serde_json::json!({
-            "threshold": threshold,
-            "tasks": quick,
-            "count": quick.len(),
-        });
-
-        Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&result).unwrap(),
-        )]))
-    }
-
-    #[tool(description = "Query issues with filters (status, priority, effort, files)")]
-    async fn issues_query(
-        &self,
-        Parameters(request): Parameters<QueryRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        let issues = self.storage.list_open_issues().map_err(|e| McpError {
-            code: ErrorCode(-32603),
-            message: Cow::from(format!("Failed to list issues: {}", e)),
-            data: None,
-        })?;
-
-        let max_effort_minutes = if let Some(ref max_effort) = request.max_effort {
-            Some(crate::utils::parse_effort(max_effort).map_err(|e| McpError {
-                code: ErrorCode(-32602),
-                message: Cow::from(format!("Invalid max_effort: {}", e)),
-                data: None,
-            })?)
-        } else {
-            None
-        };
-
-        let filtered: Vec<_> = issues
-            .iter()
-            .filter(|issue| {
-                // Filter by status
-                if let Some(ref status_filter) = request.status {
-                    let status_str = issue.metadata.status.to_string();
-                    if status_str != *status_filter {
-                        return false;
-                    }
-                }
-
-                // Filter by priority
-                if let Some(ref priority_filter) = request.priority {
-                    let priority_str = issue.metadata.priority.to_string();
-                    if priority_str != *priority_filter {
-                        return false;
-                    }
-                }
-
-                // Filter by effort
-                if let Some(max_effort) = max_effort_minutes {
-                    if let Some(ref effort) = issue.metadata.effort {
-                        if let Ok(effort_minutes) = crate::utils::parse_effort(effort) {
-                            if effort_minutes > max_effort {
-                                return false;
-                            }
-                        }
-                    } else {
-                        // No effort specified - exclude if filtering by effort
-                        return false;
-                    }
-                }
-
-                // Filter by file path
-                if let Some(ref file_filter) = request.file_contains {
-                    if !issue
-                        .metadata
-                        .files
-                        .iter()
-                        .any(|f| f.contains(file_filter))
-                    {
-                        return false;
-                    }
-                }
-
-                true
-            })
-            .take(request.limit.unwrap_or(100))
-            .map(|issue| {
-                serde_json::json!({
-                    "num": issue.metadata.id,
-                    "title": issue.metadata.title,
-                    "priority": issue.metadata.priority.to_string(),
-                    "status": issue.metadata.status.to_string(),
-                    "effort": issue.metadata.effort,
-                    "files": issue.metadata.files,
-                })
-            })
-            .collect();
-
-        let result = serde_json::json!({
-            "filters": {
-                "status": request.status,
-                "priority": request.priority,
-                "max_effort": request.max_effort,
-                "file_contains": request.file_contains,
+      for issue in &issues {
+         match issue.metadata.status {
+            Status::InProgress => in_progress.push(&issue.metadata),
+            Status::Blocked => blocked.push(&issue.metadata),
+            Status::NotStarted => {
+               if matches!(issue.metadata.priority, Priority::Critical | Priority::High) {
+                  high_priority.push(&issue.metadata);
+               }
             },
-            "issues": filtered,
-            "count": filtered.len(),
-        });
+            _ => {},
+         }
+      }
 
-        Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&result).unwrap(),
-        )]))
-    }
+      let json_output = serde_json::json!({
+          "in_progress": in_progress.iter().map(|m| serde_json::json!({
+              "num": m.id,
+              "title": m.title,
+              "priority": m.priority.to_string(),
+          })).collect::<Vec<_>>(),
+          "blocked": blocked.iter().map(|m| serde_json::json!({
+              "num": m.id,
+              "title": m.title,
+              "reason": m.blocked_reason,
+          })).collect::<Vec<_>>(),
+          "high_priority": high_priority.iter().map(|m| serde_json::json!({
+              "num": m.id,
+              "title": m.title,
+              "priority": m.priority.to_string(),
+          })).collect::<Vec<_>>(),
+          "total_open": issues.len(),
+      });
+
+      Ok(CallToolResult::success(vec![Content::text(
+         serde_json::to_string_pretty(&json_output).unwrap(),
+      )]))
+   }
+
+   #[tool(name = "issues/create", description = "Create a new issue/task")]
+   async fn create(
+      &self,
+      Parameters(request): Parameters<CreateIssueRequest>,
+   ) -> Result<CallToolResult, McpError> {
+      let priority_str = request.priority.as_deref().unwrap_or("medium");
+
+      match self.commands.create_issue(
+         request.title,
+         priority_str,
+         request.files.unwrap_or_default(),
+         request.issue,
+         request.impact,
+         request.acceptance,
+         request.effort,
+         request.context,
+         true,
+      ) {
+         Ok(_) => {
+            let bug_num = self.storage.next_bug_number().map_err(|e| McpError {
+               code:    ErrorCode(-32603),
+               message: Cow::from(format!("Failed to get bug number: {}", e)),
+               data:    None,
+            })? - 1;
+
+            let result = serde_json::json!({
+                "bug_num": bug_num,
+                "message": format!("Created BUG-{}", bug_num),
+            });
+
+            Ok(CallToolResult::success(vec![Content::text(
+               serde_json::to_string_pretty(&result).unwrap(),
+            )]))
+         },
+         Err(e) => Err(McpError {
+            code:    ErrorCode(-32603),
+            message: Cow::from(format!("Failed to create issue: {}", e)),
+            data:    None,
+         }),
+      }
+   }
+
+   #[tool(
+      name = "issues/status",
+      description = "Update issue status (start, block, done, close, reopen)"
+   )]
+   async fn status(
+      &self,
+      Parameters(request): Parameters<UpdateStatusRequest>,
+   ) -> Result<CallToolResult, McpError> {
+      let result = match request.status.as_str() {
+         "start" => self.commands.start(&request.bug_ref, true),
+         "block" => {
+            let reason = request.reason.ok_or_else(|| McpError {
+               code:    ErrorCode(-32602),
+               message: Cow::from("Block status requires a reason"),
+               data:    None,
+            })?;
+            self.commands.block(&request.bug_ref, reason, true)
+         },
+         "close" => self.commands.close(&request.bug_ref, request.reason, true),
+         "reopen" => self.commands.open(&request.bug_ref, true),
+         _ => {
+            return Err(McpError {
+               code:    ErrorCode(-32602),
+               message: Cow::from(format!("Invalid status: {}", request.status)),
+               data:    None,
+            });
+         },
+      };
+
+      result
+         .map(|_| {
+            CallToolResult::success(vec![Content::text(
+               serde_json::json!({
+                   "success": true,
+                   "status": request.status,
+               })
+               .to_string(),
+            )])
+         })
+         .map_err(|e| McpError {
+            code:    ErrorCode(-32603),
+            message: Cow::from(format!("Failed to update status: {}", e)),
+            data:    None,
+         })
+   }
+
+   #[tool(name = "issues/show", description = "Show full issue details")]
+   async fn show(
+      &self,
+      Parameters(request): Parameters<ShowRequest>,
+   ) -> Result<CallToolResult, McpError> {
+      let bug_num = self
+         .storage
+         .resolve_bug_ref(&request.bug_ref)
+         .map_err(|e| McpError {
+            code:    ErrorCode(-32602),
+            message: Cow::from(format!("Invalid bug ref: {}", e)),
+            data:    None,
+         })?;
+
+      let issue = self.storage.load_issue(bug_num).map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to load issue: {}", e)),
+         data:    None,
+      })?;
+
+      Ok(CallToolResult::success(vec![Content::text(issue.to_mdx())]))
+   }
+
+   #[tool(name = "issues/checkpoint", description = "Add checkpoint/progress note to an issue")]
+   async fn checkpoint(
+      &self,
+      Parameters(request): Parameters<CheckpointRequest>,
+   ) -> Result<CallToolResult, McpError> {
+      self
+         .commands
+         .checkpoint(&request.bug_ref, request.message.clone(), true)
+         .map_err(|e| McpError {
+            code:    ErrorCode(-32603),
+            message: Cow::from(format!("Failed to add checkpoint: {}", e)),
+            data:    None,
+         })?;
+
+      let bug_num = self
+         .storage
+         .resolve_bug_ref(&request.bug_ref)
+         .map_err(|e| McpError {
+            code:    ErrorCode(-32602),
+            message: Cow::from(format!("Invalid bug ref: {}", e)),
+            data:    None,
+         })?;
+
+      let result = serde_json::json!({
+          "success": true,
+          "bug_num": bug_num,
+          "message": request.message,
+      });
+
+      Ok(CallToolResult::success(vec![Content::text(
+         serde_json::to_string_pretty(&result).unwrap(),
+      )]))
+   }
+
+   #[tool(name = "issues/wins", description = "Find quick-win tasks under effort threshold")]
+   async fn wins(
+      &self,
+      Parameters(request): Parameters<QuickWinsRequest>,
+   ) -> Result<CallToolResult, McpError> {
+      let threshold = request.threshold.as_deref().unwrap_or("1h");
+
+      let threshold_minutes = crate::utils::parse_effort(threshold).map_err(|e| McpError {
+         code:    ErrorCode(-32602),
+         message: Cow::from(format!("Invalid threshold: {}", e)),
+         data:    None,
+      })?;
+
+      let issues = self.storage.list_open_issues().map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to list issues: {}", e)),
+         data:    None,
+      })?;
+
+      let quick: Vec<_> = issues
+         .iter()
+         .filter(|i| {
+            i.metadata
+               .effort
+               .as_ref()
+               .and_then(|e| crate::utils::parse_effort(e).ok())
+               .map(|m| m <= threshold_minutes)
+               .unwrap_or(false)
+         })
+         .map(|issue| {
+            serde_json::json!({
+                "num": issue.metadata.id,
+                "title": issue.metadata.title,
+                "priority": issue.metadata.priority.to_string(),
+                "effort": issue.metadata.effort,
+                "status": issue.metadata.status.to_string(),
+                "files": issue.metadata.files,
+            })
+         })
+         .collect();
+
+      let result = serde_json::json!({
+          "threshold": threshold,
+          "tasks": quick,
+          "count": quick.len(),
+      });
+
+      Ok(CallToolResult::success(vec![Content::text(
+         serde_json::to_string_pretty(&result).unwrap(),
+      )]))
+   }
+
+   #[tool(
+      name = "issues/query",
+      description = "Query issues with filters (status, priority, effort, files)"
+   )]
+   async fn query(
+      &self,
+      Parameters(request): Parameters<QueryRequest>,
+   ) -> Result<CallToolResult, McpError> {
+      let issues = self.storage.list_open_issues().map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to list issues: {}", e)),
+         data:    None,
+      })?;
+
+      let max_effort_minutes = if let Some(ref max_effort) = request.max_effort {
+         Some(crate::utils::parse_effort(max_effort).map_err(|e| McpError {
+            code:    ErrorCode(-32602),
+            message: Cow::from(format!("Invalid max_effort: {}", e)),
+            data:    None,
+         })?)
+      } else {
+         None
+      };
+
+      let filtered: Vec<_> = issues
+         .iter()
+         .filter(|issue| {
+            // Filter by status
+            if let Some(ref status_filter) = request.status {
+               let status_str = issue.metadata.status.to_string();
+               if status_str != *status_filter {
+                  return false;
+               }
+            }
+
+            // Filter by priority
+            if let Some(ref priority_filter) = request.priority {
+               let priority_str = issue.metadata.priority.to_string();
+               if priority_str != *priority_filter {
+                  return false;
+               }
+            }
+
+            // Filter by effort
+            if let Some(max_effort) = max_effort_minutes {
+               if let Some(ref effort) = issue.metadata.effort {
+                  if let Ok(effort_minutes) = crate::utils::parse_effort(effort)
+                     && effort_minutes > max_effort
+                  {
+                     return false;
+                  }
+               } else {
+                  // No effort specified - exclude if filtering by effort
+                  return false;
+               }
+            }
+
+            // Filter by file path
+            if let Some(ref file_filter) = request.file_contains
+               && !issue.metadata.files.iter().any(|f| f.contains(file_filter))
+            {
+               return false;
+            }
+
+            true
+         })
+         .take(request.limit.unwrap_or(100))
+         .map(|issue| {
+            serde_json::json!({
+                "num": issue.metadata.id,
+                "title": issue.metadata.title,
+                "priority": issue.metadata.priority.to_string(),
+                "status": issue.metadata.status.to_string(),
+                "effort": issue.metadata.effort,
+                "files": issue.metadata.files,
+            })
+         })
+         .collect();
+
+      let result = serde_json::json!({
+          "filters": {
+              "status": request.status,
+              "priority": request.priority,
+              "max_effort": request.max_effort,
+              "file_contains": request.file_contains,
+          },
+          "issues": filtered,
+          "count": filtered.len(),
+      });
+
+      Ok(CallToolResult::success(vec![Content::text(
+         serde_json::to_string_pretty(&result).unwrap(),
+      )]))
+   }
 }
 
 #[tool_handler]
 impl ServerHandler for IssueTrackerMCP {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            server_info: Implementation {
-                name: "agentx-mcp".into(),
-                version: env!("CARGO_PKG_VERSION").into(),
-                title: None,
-                website_url: None,
-                icons: None,
+   fn get_info(&self) -> ServerInfo {
+      ServerInfo {
+         protocol_version: ProtocolVersion::V_2024_11_05,
+         capabilities:     ServerCapabilities::builder()
+            .enable_tools()
+            .enable_resources()
+            .build(),
+         server_info:      Implementation {
+            name:        "agentx-mcp".into(),
+            version:     env!("CARGO_PKG_VERSION").into(),
+            title:       None,
+            website_url: None,
+            icons:       None,
+         },
+         instructions:     Some(
+            "Issue tracker MCP server providing tools for managing tasks and bugs. Use \
+             issues/context to see current work, issues/create to add tasks, issues/checkpoint \
+             for progress notes, issues/query for advanced filtering, and issues/quick_wins to \
+             find low-effort tasks."
+               .to_string(),
+         ),
+      }
+   }
+
+   async fn list_resources(
+      &self,
+      _request: Option<PaginatedRequestParam>,
+      _context: RequestContext<RoleServer>,
+   ) -> Result<ListResourcesResult, McpError> {
+      let open_issues = self.storage.list_open_issues().map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to list issues: {}", e)),
+         data:    None,
+      })?;
+
+      let closed_issues = self.storage.list_closed_issues().map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to list closed issues: {}", e)),
+         data:    None,
+      })?;
+
+      let mut resources = Vec::new();
+
+      // Add open issues
+      for issue in open_issues {
+         resources.push(Annotated::new(
+            RawResource {
+               uri:         format!("issue://{}", issue.metadata.id),
+               name:        format!("BUG-{}: {}", issue.metadata.id, issue.metadata.title),
+               title:       None,
+               description: Some(format!(
+                  "[{}] {} - {}",
+                  issue.metadata.status, issue.metadata.priority, issue.metadata.title
+               )),
+               mime_type:   Some("text/markdown".into()),
+               size:        None,
+               icons:       None,
             },
-            instructions: Some(
-                "Issue tracker MCP server providing tools for managing tasks and bugs. \
-                 Use issues/context to see current work, issues/create to add tasks, \
-                 issues/checkpoint for progress notes, issues/query for advanced filtering, \
-                 and issues/quick_wins to find low-effort tasks."
-                    .to_string(),
-            ),
-        }
-    }
+            None,
+         ));
+      }
+
+      // Add closed issues
+      for issue in closed_issues {
+         resources.push(Annotated::new(
+            RawResource {
+               uri:         format!("issue://{}", issue.metadata.id),
+               name:        format!("BUG-{}: {} (closed)", issue.metadata.id, issue.metadata.title),
+               title:       None,
+               description: Some(format!("[closed] {}", issue.metadata.title)),
+               mime_type:   Some("text/markdown".into()),
+               size:        None,
+               icons:       None,
+            },
+            None,
+         ));
+      }
+
+      Ok(ListResourcesResult { next_cursor: None, resources })
+   }
+
+   async fn read_resource(
+      &self,
+      request: ReadResourceRequestParam,
+      _context: RequestContext<RoleServer>,
+   ) -> Result<ReadResourceResult, McpError> {
+      let bug_num = request
+         .uri
+         .strip_prefix("issue://")
+         .and_then(|s| s.parse::<u32>().ok())
+         .ok_or_else(|| McpError {
+            code:    ErrorCode(-32602),
+            message: Cow::from(format!("Invalid issue URI: {}", request.uri)),
+            data:    None,
+         })?;
+
+      let issue = self.storage.load_issue(bug_num).map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to load issue: {}", e)),
+         data:    None,
+      })?;
+
+      Ok(ReadResourceResult {
+         contents: vec![ResourceContents::TextResourceContents {
+            uri:       request.uri,
+            mime_type: Some("text/markdown".into()),
+            text:      issue.to_mdx(),
+            meta:      None,
+         }],
+      })
+   }
 }

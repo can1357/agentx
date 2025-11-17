@@ -81,11 +81,10 @@ impl Commands {
                     marker, issue.metadata.id, issue.metadata.title
                 );
 
-                if issue.metadata.status == Status::Blocked {
-                    if let Some(reason) = &issue.metadata.blocked_reason {
+                if issue.metadata.status == Status::Blocked
+                    && let Some(reason) = &issue.metadata.blocked_reason {
                         println!("       Blocked: {reason}");
                     }
-                }
 
                 if verbose && !issue.metadata.files.is_empty() {
                     for file in &issue.metadata.files {
@@ -394,11 +393,10 @@ impl Commands {
                     "   BUG-{}: {}",
                     item["num"], item["title"].as_str().unwrap()
                 );
-                if let Some(reason) = item.get("blocked_reason") {
-                    if !reason.is_null() {
+                if let Some(reason) = item.get("blocked_reason")
+                    && !reason.is_null() {
                         println!("      → {}", reason.as_str().unwrap());
                     }
-                }
             }
             println!();
         }
@@ -876,8 +874,8 @@ impl Commands {
                     }
 
                     // Add close note if provided
-                    if let Some(note) = &message {
-                        if let Ok(mut issue) = self.storage.load_issue(bug_num) {
+                    if let Some(note) = &message
+                        && let Ok(mut issue) = self.storage.load_issue(bug_num) {
                             let timestamp = Utc::now().format("%Y-%m-%d").to_string();
                             issue.body.push_str(&format!("\n\n---\n\n**Closed** ({timestamp}): {note}\n"));
                             if let Err(e) = self.storage.save_issue(&issue, true) {
@@ -885,7 +883,6 @@ impl Commands {
                                 continue;
                             }
                         }
-                    }
 
                     // Move to closed directory
                     if let Err(e) = self.storage.move_issue(bug_num, false) {
@@ -938,11 +935,10 @@ impl Commands {
 
         // Check open issues for recent activity
         for issue in &all_issues {
-            if let Some(started_time) = issue.metadata.started {
-                if started_time > since {
+            if let Some(started_time) = issue.metadata.started
+                && started_time > since {
                     started.push(issue);
                 }
-            }
 
             // Check for recent checkpoints in body
             if issue.body.contains("**Checkpoint**") {
@@ -953,11 +949,10 @@ impl Commands {
 
         // Check closed issues
         for issue in &closed_issues {
-            if let Some(closed_time) = issue.metadata.closed {
-                if closed_time > since {
+            if let Some(closed_time) = issue.metadata.closed
+                && closed_time > since {
                     closed.push(issue);
                 }
-            }
         }
 
         if json {
@@ -1086,10 +1081,184 @@ impl Commands {
         Ok(())
     }
 
+    pub fn depend(
+        &self,
+        bug_ref: &str,
+        add_deps: Vec<String>,
+        remove_deps: Vec<String>,
+        json: bool,
+    ) -> Result<()> {
+        let bug_num = self.storage.resolve_bug_ref(bug_ref)?;
+
+        // Resolve all dependency references
+        let mut add_nums = Vec::new();
+        for dep_ref in &add_deps {
+            let dep_num = self.storage.resolve_bug_ref(dep_ref)?;
+            // Verify dependency exists
+            self.storage.load_issue(dep_num)?;
+            add_nums.push(dep_num);
+        }
+
+        let mut remove_nums = Vec::new();
+        for dep_ref in &remove_deps {
+            let dep_num = self.storage.resolve_bug_ref(dep_ref)?;
+            remove_nums.push(dep_num);
+        }
+
+        // Check for cycles before adding
+        for &dep_num in &add_nums {
+            if self.would_create_cycle(bug_num, dep_num)? {
+                anyhow::bail!(
+                    "Adding BUG-{dep_num} as dependency would create a cycle (BUG-{dep_num} transitively depends on BUG-{bug_num})"
+                );
+            }
+        }
+
+        // Update dependencies
+        self.storage.update_issue_metadata(bug_num, |meta| {
+            // Add new dependencies
+            for dep_num in add_nums.iter() {
+                if !meta.depends_on.contains(dep_num) {
+                    meta.depends_on.push(*dep_num);
+                }
+            }
+
+            // Remove dependencies
+            meta.depends_on.retain(|&d| !remove_nums.contains(&d));
+
+            // Sort for consistent ordering
+            meta.depends_on.sort_unstable();
+        })?;
+
+        // Update reverse dependencies (blocks field)
+        for &dep_num in &add_nums {
+            self.storage.update_issue_metadata(dep_num, |meta| {
+                if !meta.blocks.contains(&bug_num) {
+                    meta.blocks.push(bug_num);
+                }
+                meta.blocks.sort_unstable();
+            })?;
+        }
+
+        for &dep_num in &remove_nums {
+            self.storage.update_issue_metadata(dep_num, |meta| {
+                meta.blocks.retain(|&b| b != bug_num);
+            })?;
+        }
+
+        // Load updated issue
+        let issue = self.storage.load_issue(bug_num)?;
+
+        if json {
+            let output = json!({
+                "bug_num": bug_num,
+                "added": add_nums,
+                "removed": remove_nums,
+                "depends_on": issue.metadata.depends_on,
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        } else {
+            println!("✓ Updated dependencies for BUG-{bug_num}");
+
+            if !add_nums.is_empty() {
+                println!(
+                    "  Added: {}",
+                    add_nums
+                        .iter()
+                        .map(|n| format!("BUG-{n}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+
+            if !remove_nums.is_empty() {
+                println!(
+                    "  Removed: {}",
+                    remove_nums
+                        .iter()
+                        .map(|n| format!("BUG-{n}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+
+            if !issue.metadata.depends_on.is_empty() {
+                println!(
+                    "  Now depends on: {}",
+                    issue
+                        .metadata
+                        .depends_on
+                        .iter()
+                        .map(|n| format!("BUG-{n}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            } else {
+                println!("  Now depends on: (none)");
+            }
+        }
+
+        Ok(())
+    }
+
+    fn would_create_cycle(&self, bug_num: u32, dep_num: u32) -> Result<bool> {
+        // Check if dep_num transitively depends on bug_num
+        // If so, adding bug_num -> dep_num would create a cycle
+
+        let mut visited = std::collections::HashSet::new();
+        let mut stack = vec![dep_num];
+
+        while let Some(current) = stack.pop() {
+            if current == bug_num {
+                return Ok(true); // Cycle detected
+            }
+
+            if visited.contains(&current) {
+                continue;
+            }
+            visited.insert(current);
+
+            // Add all dependencies of current to stack
+            if let Ok(issue) = self.storage.load_issue(current) {
+                for &dep in &issue.metadata.depends_on {
+                    if !visited.contains(&dep) {
+                        stack.push(dep);
+                    }
+                }
+            }
+        }
+
+        Ok(false)
+    }
+
     pub fn critical_path(&self, json: bool) -> Result<()> {
         let issues = self.storage.list_open_issues()?;
 
-        // Build dependency graph
+        // Build dependency graph using Tarjan's algorithm for robustness
+        // Find strongly connected components (cycles) and longest acyclic path
+
+        let issue_map: std::collections::HashMap<u32, &crate::issue::Issue> =
+            issues.iter().map(|i| (i.metadata.id, i)).collect();
+
+        // Detect cycles using Tarjan's algorithm
+        let cycles = Self::find_cycles(&issues);
+
+        if !cycles.is_empty() && !json {
+            println!("\n⚠️  Warning: Dependency cycles detected:");
+            for cycle in &cycles {
+                println!(
+                    "   {}",
+                    cycle
+                        .iter()
+                        .map(|id| format!("BUG-{id}"))
+                        .collect::<Vec<_>>()
+                        .join(" → ")
+                );
+            }
+            println!();
+        }
+
+        // Find longest path (critical path)
         let mut longest_chain = Vec::new();
         let mut visited = std::collections::HashSet::new();
 
@@ -1101,7 +1270,7 @@ impl Commands {
             longest: &mut Vec<u32>,
         ) {
             if visited.contains(&issue_id) {
-                return; // Cycle detected
+                return; // Cycle or already visited
             }
 
             visited.insert(issue_id);
@@ -1137,7 +1306,7 @@ impl Commands {
         if json {
             let chain_details: Vec<_> = longest_chain
                 .iter()
-                .filter_map(|&id| issues.iter().find(|i| i.metadata.id == id))
+                .filter_map(|&id| issue_map.get(&id).copied())
                 .map(|issue| {
                     json!({
                         "num": issue.metadata.id,
@@ -1169,7 +1338,7 @@ impl Commands {
         println!("{}\n", "=".repeat(80));
 
         for (i, &bug_id) in longest_chain.iter().enumerate() {
-            if let Some(issue) = issues.iter().find(|i| i.metadata.id == bug_id) {
+            if let Some(&issue) = issue_map.get(&bug_id) {
                 let arrow = if i == 0 { "▶" } else { "↓" };
                 println!(
                     "{} BUG-{} [{}] [{}]: {}",
@@ -1183,5 +1352,90 @@ impl Commands {
         }
 
         Ok(())
+    }
+
+    // Tarjan's algorithm for finding strongly connected components (cycles)
+    fn find_cycles(issues: &[crate::issue::Issue]) -> Vec<Vec<u32>> {
+        let mut index = 0;
+        let mut stack = Vec::new();
+        let mut indices: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+        let mut lowlinks: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+        let mut on_stack: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let mut cycles = Vec::new();
+
+        let issue_map: std::collections::HashMap<u32, &crate::issue::Issue> =
+            issues.iter().map(|i| (i.metadata.id, i)).collect();
+
+        fn strongconnect(
+            v: u32,
+            issue_map: &std::collections::HashMap<u32, &crate::issue::Issue>,
+            index: &mut usize,
+            stack: &mut Vec<u32>,
+            indices: &mut std::collections::HashMap<u32, usize>,
+            lowlinks: &mut std::collections::HashMap<u32, usize>,
+            on_stack: &mut std::collections::HashSet<u32>,
+            cycles: &mut Vec<Vec<u32>>,
+        ) {
+            indices.insert(v, *index);
+            lowlinks.insert(v, *index);
+            *index += 1;
+            stack.push(v);
+            on_stack.insert(v);
+
+            // Find the issue
+            if let Some(&issue) = issue_map.get(&v) {
+                // Check all dependencies
+                for &dep in &issue.metadata.depends_on {
+                    if !indices.contains_key(&dep) {
+                        // Dependency not visited
+                        strongconnect(dep, issue_map, index, stack, indices, lowlinks, on_stack, cycles);
+                        let dep_lowlink = lowlinks[&dep];
+                        let v_lowlink = lowlinks[&v];
+                        lowlinks.insert(v, v_lowlink.min(dep_lowlink));
+                    } else if on_stack.contains(&dep) {
+                        // Dependency on stack - part of current SCC
+                        let dep_index = indices[&dep];
+                        let v_lowlink = lowlinks[&v];
+                        lowlinks.insert(v, v_lowlink.min(dep_index));
+                    }
+                }
+            }
+
+            // If v is a root node, pop the stack and generate an SCC
+            if lowlinks[&v] == indices[&v] {
+                let mut scc = Vec::new();
+                loop {
+                    let w = stack.pop().unwrap();
+                    on_stack.remove(&w);
+                    scc.push(w);
+                    if w == v {
+                        break;
+                    }
+                }
+
+                // Only report cycles (SCCs with more than one node)
+                if scc.len() > 1 {
+                    scc.reverse();
+                    cycles.push(scc);
+                }
+            }
+        }
+
+        for issue in issues {
+            if !indices.contains_key(&issue.metadata.id) {
+                strongconnect(
+                    issue.metadata.id,
+                    &issue_map,
+                    &mut index,
+                    &mut stack,
+                    &mut indices,
+                    &mut lowlinks,
+                    &mut on_stack,
+                    &mut cycles,
+                );
+            }
+        }
+
+        cycles
     }
 }

@@ -154,11 +154,10 @@ impl Storage {
                     let name = entry.file_name();
                     let name_str = name.to_string_lossy();
 
-                    if let Some(caps) = BUG_NUMBER_RE.captures(&name_str) {
-                        if let Ok(num) = caps[1].parse::<u32>() {
+                    if let Some(caps) = BUG_NUMBER_RE.captures(&name_str)
+                        && let Ok(num) = caps[1].parse::<u32>() {
                             max_num = max_num.max(num);
                         }
-                    }
                 }
             }
         }
@@ -260,11 +259,10 @@ impl Storage {
                     let name = entry.file_name();
                     let name_str = name.to_string_lossy();
 
-                    if let Some(caps) = BUG_NUMBER_RE.captures(&name_str) {
-                        if let Ok(num) = caps[1].parse::<u32>() {
+                    if let Some(caps) = BUG_NUMBER_RE.captures(&name_str)
+                        && let Ok(num) = caps[1].parse::<u32>() {
                             bug_nums.push(num);
                         }
-                    }
                 }
             }
         }

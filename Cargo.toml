@@ -1,12 +1,12 @@
 [package]
-name = "issues"
+name = "agentx"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 clap_complete = "4.5"
-colored = "2.1"
+colored = "3.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 serde_json = "1.0"
@@ -18,7 +18,7 @@ rmcp = { version = "0.8", features = ["server", "transport-io"] }
 tokio = { version = "1", features = ["full"] }
 schemars = "1.0"
 once_cell = "1.20"
-dirs = "5.0"
+dirs = "6.0"
 
 [[bin]]
 name = "agentx"

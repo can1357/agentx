@@ -56,11 +56,7 @@ impl Config {
     /// Load config from .agentxrc.yaml
     /// Searches from current directory up to root
     pub fn load() -> Self {
-        if let Ok(config) = Self::find_and_load() {
-            config
-        } else {
-            Self::default()
-        }
+        Self::find_and_load().unwrap_or_default()
     }
 
     fn find_and_load() -> Result<Self> {

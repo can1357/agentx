@@ -133,6 +133,17 @@ pub enum Command {
     /// Show issue dependencies (what it depends on, what depends on it)
     Dependencies { bug_ref: String },
 
+    /// Manage issue dependencies
+    Depend {
+        bug_ref: String,
+
+        #[arg(long, value_delimiter = ',')]
+        on: Vec<String>,
+
+        #[arg(long, value_delimiter = ',')]
+        remove: Vec<String>,
+    },
+
     /// Find longest dependency chain (critical path)
     CriticalPath,
 
@@ -140,6 +151,12 @@ pub enum Command {
     Completions {
         #[arg(value_name = "SHELL")]
         shell: String,
+    },
+
+    /// Initialize config file
+    Init {
+        #[arg(long, help = "Create in home directory instead of current directory")]
+        global: bool,
     },
 
     /// Start MCP server on stdio

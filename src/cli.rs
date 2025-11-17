@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "issues")]
+#[command(name = "agentx")]
 #[command(about = "Issue tracker CLI for structured task/bug tracking")]
 pub struct Cli {
     #[arg(long, global = true, help = "Output in JSON format")]
@@ -128,6 +128,18 @@ pub enum Command {
     Summary {
         #[arg(long, help = "Hours to look back (default: 24)")]
         hours: Option<u64>,
+    },
+
+    /// Show issue dependencies (what it depends on, what depends on it)
+    Dependencies { bug_ref: String },
+
+    /// Find longest dependency chain (critical path)
+    CriticalPath,
+
+    /// Generate shell completions
+    Completions {
+        #[arg(value_name = "SHELL")]
+        shell: String,
     },
 
     /// Start MCP server on stdio

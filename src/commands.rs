@@ -1006,4 +1006,182 @@ impl Commands {
 
         Ok(())
     }
+
+    pub fn dependencies(&self, bug_ref: &str, json: bool) -> Result<()> {
+        let bug_num = self.storage.resolve_bug_ref(bug_ref)?;
+        let issue = self.storage.load_issue(bug_num)?;
+
+        // Find what this issue depends on
+        let depends_on: Vec<_> = issue
+            .metadata
+            .depends_on
+            .iter()
+            .filter_map(|&dep_num| self.storage.load_issue(dep_num).ok())
+            .collect();
+
+        // Find what depends on this issue
+        let all_issues = self.storage.list_open_issues()?;
+        let blocks: Vec<_> = all_issues
+            .iter()
+            .filter(|other| other.metadata.depends_on.contains(&bug_num))
+            .collect();
+
+        if json {
+            let output = json!({
+                "issue": {
+                    "num": issue.metadata.id,
+                    "title": issue.metadata.title,
+                },
+                "depends_on": depends_on.iter().map(|dep| {
+                    json!({
+                        "num": dep.metadata.id,
+                        "title": dep.metadata.title,
+                        "status": dep.metadata.status.to_string(),
+                    })
+                }).collect::<Vec<_>>(),
+                "blocks": blocks.iter().map(|blocked| {
+                    json!({
+                        "num": blocked.metadata.id,
+                        "title": blocked.metadata.title,
+                        "status": blocked.metadata.status.to_string(),
+                    })
+                }).collect::<Vec<_>>(),
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+            return Ok(());
+        }
+
+        println!("\n{}", "=".repeat(80));
+        println!("DEPENDENCIES - BUG-{}: {}", issue.metadata.id, issue.metadata.title);
+        println!("{}\n", "=".repeat(80));
+
+        if !depends_on.is_empty() {
+            println!("⬇️  Depends on ({}):", depends_on.len());
+            for dep in &depends_on {
+                println!(
+                    "   BUG-{} [{}]: {}",
+                    dep.metadata.id,
+                    dep.metadata.status,
+                    dep.metadata.title
+                );
+            }
+            println!();
+        } else {
+            println!("⬇️  Depends on: (none)\n");
+        }
+
+        if !blocks.is_empty() {
+            println!("⬆️  Blocks ({}):", blocks.len());
+            for blocked in &blocks {
+                println!(
+                    "   BUG-{} [{}]: {}",
+                    blocked.metadata.id, blocked.metadata.status, blocked.metadata.title
+                );
+            }
+            println!();
+        } else {
+            println!("⬆️  Blocks: (none)\n");
+        }
+
+        Ok(())
+    }
+
+    pub fn critical_path(&self, json: bool) -> Result<()> {
+        let issues = self.storage.list_open_issues()?;
+
+        // Build dependency graph
+        let mut longest_chain = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+
+        fn find_chain(
+            issue_id: u32,
+            issues: &[crate::issue::Issue],
+            visited: &mut std::collections::HashSet<u32>,
+            current_chain: &mut Vec<u32>,
+            longest: &mut Vec<u32>,
+        ) {
+            if visited.contains(&issue_id) {
+                return; // Cycle detected
+            }
+
+            visited.insert(issue_id);
+            current_chain.push(issue_id);
+
+            if current_chain.len() > longest.len() {
+                *longest = current_chain.clone();
+            }
+
+            // Find all issues that depend on this one
+            for other in issues {
+                if other.metadata.depends_on.contains(&issue_id) {
+                    find_chain(other.metadata.id, issues, visited, current_chain, longest);
+                }
+            }
+
+            current_chain.pop();
+            visited.remove(&issue_id);
+        }
+
+        // Try starting from each issue
+        for issue in &issues {
+            let mut current_chain = Vec::new();
+            find_chain(
+                issue.metadata.id,
+                &issues,
+                &mut visited,
+                &mut current_chain,
+                &mut longest_chain,
+            );
+        }
+
+        if json {
+            let chain_details: Vec<_> = longest_chain
+                .iter()
+                .filter_map(|&id| issues.iter().find(|i| i.metadata.id == id))
+                .map(|issue| {
+                    json!({
+                        "num": issue.metadata.id,
+                        "title": issue.metadata.title,
+                        "status": issue.metadata.status.to_string(),
+                        "priority": issue.metadata.priority.to_string(),
+                    })
+                })
+                .collect();
+
+            let output = json!({
+                "length": longest_chain.len(),
+                "chain": chain_details,
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+            return Ok(());
+        }
+
+        if longest_chain.is_empty() {
+            println!("No dependency chains found");
+            return Ok(());
+        }
+
+        println!("\n{}", "=".repeat(80));
+        println!(
+            "CRITICAL PATH - Longest dependency chain ({} issues)",
+            longest_chain.len()
+        );
+        println!("{}\n", "=".repeat(80));
+
+        for (i, &bug_id) in longest_chain.iter().enumerate() {
+            if let Some(issue) = issues.iter().find(|i| i.metadata.id == bug_id) {
+                let arrow = if i == 0 { "▶" } else { "↓" };
+                println!(
+                    "{} BUG-{} [{}] [{}]: {}",
+                    arrow,
+                    issue.metadata.id,
+                    issue.metadata.status,
+                    issue.metadata.priority,
+                    issue.metadata.title
+                );
+            }
+        }
+
+        Ok(())
+    }
 }

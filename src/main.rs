@@ -1,17 +1,19 @@
 use anyhow::Result;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
+use clap_complete::{generate, Shell};
 use issues::cli::{AliasAction, Cli, Command};
 use issues::commands::Commands;
+use issues::config::Config;
 use issues::guide;
 use issues::mcp::IssueTrackerMCP;
 use issues::storage::Storage;
-use std::env;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let current_dir = env::current_dir()?;
-    let storage = Storage::new(current_dir);
+    let config = Config::load();
+    let issues_dir = config.resolve_issues_directory();
+    let storage = Storage::new(issues_dir);
     let commands = Commands::new(storage);
 
     match cli.command {
@@ -91,6 +93,34 @@ async fn main() -> Result<()> {
         }
         Command::Summary { hours } => {
             commands.summary(hours, cli.json)?;
+        }
+        Command::Dependencies { bug_ref } => {
+            commands.dependencies(&bug_ref, cli.json)?;
+        }
+        Command::CriticalPath => {
+            commands.critical_path(cli.json)?;
+        }
+        Command::Completions { shell } => {
+            let shell_type = match shell.to_lowercase().as_str() {
+                "bash" => Shell::Bash,
+                "zsh" => Shell::Zsh,
+                "fish" => Shell::Fish,
+                "powershell" => Shell::PowerShell,
+                "elvish" => Shell::Elvish,
+                _ => {
+                    eprintln!("Unsupported shell: {shell}");
+                    eprintln!("Supported: bash, zsh, fish, powershell, elvish");
+                    std::process::exit(1);
+                }
+            };
+
+            let mut cmd = Cli::command();
+            generate(
+                shell_type,
+                &mut cmd,
+                "agentx",
+                &mut std::io::stdout(),
+            );
         }
         Command::Serve => {
             IssueTrackerMCP::serve_stdio().await?;

@@ -5,7 +5,7 @@ The AgentX issue tracker now includes an MCP (Model Context Protocol) server tha
 ## Starting the Server
 
 ```bash
-issues serve
+agentx serve
 ```
 
 The server runs on stdio by default, making it compatible with MCP clients like Claude Desktop.
@@ -61,7 +61,7 @@ Add to your `claude_desktop_config.json`:
 {
   "mcpServers": {
     "agentx": {
-      "command": "/path/to/issues",
+      "command": "/path/to/agentx",
       "args": ["serve"]
     }
   }

@@ -5,10 +5,8 @@ use anyhow::Result;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{
-        CallToolResult, Content, ErrorCode, ErrorData as McpError, GetPromptResult,
-        Implementation, ListPromptsResult, ListResourcesResult, Prompt, PromptMessage,
-        ProtocolVersion, ReadResourceResult, Resource, ResourceContents, ServerCapabilities,
-        ServerInfo, TextContent,
+        CallToolResult, Content, ErrorCode, ErrorData as McpError, Implementation,
+        ProtocolVersion, ServerCapabilities, ServerInfo,
     },
     tool, tool_handler, tool_router, ServiceExt, ServerHandler,
 };
@@ -470,11 +468,7 @@ impl ServerHandler for IssueTrackerMCP {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder()
-                .enable_tools()
-                .enable_resources()
-                .enable_prompts()
-                .build(),
+            capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation {
                 name: "agentx-mcp".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
@@ -486,179 +480,9 @@ impl ServerHandler for IssueTrackerMCP {
                 "Issue tracker MCP server providing tools for managing tasks and bugs. \
                  Use issues/context to see current work, issues/create to add tasks, \
                  issues/checkpoint for progress notes, issues/query for advanced filtering, \
-                 and issues/quick_wins to find low-effort tasks. \
-                 \
-                 Resources: issue://<num> for MDX content. \
-                 Prompts: triage, standup, weekly-review."
+                 and issues/quick_wins to find low-effort tasks."
                     .to_string(),
             ),
         }
-    }
-
-    async fn list_resources(&self) -> Result<ListResourcesResult, McpError> {
-        let issues = self.storage.list_open_issues().map_err(|e| McpError {
-            code: ErrorCode(-32603),
-            message: Cow::from(format!("Failed to list issues: {}", e)),
-            data: None,
-        })?;
-
-        let resources: Vec<Resource> = issues
-            .into_iter()
-            .map(|issue| Resource {
-                uri: format!("issue://{}", issue.metadata.id).into(),
-                name: format!("BUG-{}: {}", issue.metadata.id, issue.metadata.title),
-                description: Some(format!(
-                    "Priority: {}, Status: {}",
-                    issue.metadata.priority, issue.metadata.status
-                )),
-                mime_type: Some("text/markdown".into()),
-            })
-            .collect();
-
-        Ok(ListResourcesResult { resources })
-    }
-
-    async fn read_resource(&self, uri: &str) -> Result<ReadResourceResult, McpError> {
-        // Parse URI: issue://<num>
-        let bug_num_str = uri
-            .strip_prefix("issue://")
-            .ok_or_else(|| McpError {
-                code: ErrorCode(-32602),
-                message: Cow::from(format!("Invalid resource URI: {uri}")),
-                data: None,
-            })?;
-
-        let bug_num: u32 = bug_num_str.parse().map_err(|_| McpError {
-            code: ErrorCode(-32602),
-            message: Cow::from(format!("Invalid bug number in URI: {bug_num_str}")),
-            data: None,
-        })?;
-
-        let issue = self.storage.load_issue(bug_num).map_err(|e| McpError {
-            code: ErrorCode(-32603),
-            message: Cow::from(format!("Failed to load issue: {}", e)),
-            data: None,
-        })?;
-
-        Ok(ReadResourceResult {
-            contents: vec![ResourceContents::Text(TextContent {
-                uri: uri.into(),
-                mime_type: Some("text/markdown".into()),
-                text: issue.to_mdx(),
-            })],
-        })
-    }
-
-    async fn list_prompts(&self) -> Result<ListPromptsResult, McpError> {
-        Ok(ListPromptsResult {
-            prompts: vec![
-                Prompt {
-                    name: "triage".into(),
-                    description: Some(
-                        "Triage and prioritize current tasks based on context".into(),
-                    ),
-                    arguments: None,
-                },
-                Prompt {
-                    name: "standup".into(),
-                    description: Some("Generate daily standup summary".into()),
-                    arguments: None,
-                },
-                Prompt {
-                    name: "weekly-review".into(),
-                    description: Some("Generate weekly review of completed and pending work".into()),
-                    arguments: None,
-                },
-            ],
-        })
-    }
-
-    async fn get_prompt(
-        &self,
-        name: &str,
-        _arguments: Option<std::collections::HashMap<String, String>>,
-    ) -> Result<GetPromptResult, McpError> {
-        let issues = self.storage.list_open_issues().map_err(|e| McpError {
-            code: ErrorCode(-32603),
-            message: Cow::from(format!("Failed to list issues: {}", e)),
-            data: None,
-        })?;
-
-        let context_summary = serde_json::json!({
-            "total_open": issues.len(),
-            "in_progress": issues.iter().filter(|i| i.metadata.status == Status::InProgress).count(),
-            "blocked": issues.iter().filter(|i| i.metadata.status == Status::Blocked).count(),
-            "critical": issues.iter().filter(|i| i.metadata.priority == Priority::Critical).count(),
-        });
-
-        let prompt_text = match name {
-            "triage" => format!(
-                "# Task Triage\n\n\
-                Current context: {} open issues\n\
-                - {} in progress\n\
-                - {} blocked\n\
-                - {} critical priority\n\n\
-                Review all open issues and suggest:\n\
-                1. Priority adjustments based on impact and dependencies\n\
-                2. Tasks that should be started next\n\
-                3. Blocked tasks that need unblocking\n\
-                4. Issues that could be quick wins\n\n\
-                Use issues/query to filter and analyze tasks.",
-                context_summary["total_open"],
-                context_summary["in_progress"],
-                context_summary["blocked"],
-                context_summary["critical"]
-            ),
-            "standup" => format!(
-                "# Daily Standup Summary\n\n\
-                Generate a standup summary covering:\n\n\
-                **Yesterday:**\n\
-                - Use issues/query with filters to find recently updated issues\n\
-                - Summarize completed checkpoints and status changes\n\n\
-                **Today:**\n\
-                - List in-progress tasks (status=in_progress)\n\
-                - Identify next priorities from critical/high items\n\n\
-                **Blockers:**\n\
-                - List all blocked issues (status=blocked)\n\
-                - Note reasons and required actions\n\n\
-                Current state: {} open issues, {} in progress, {} blocked",
-                context_summary["total_open"],
-                context_summary["in_progress"],
-                context_summary["blocked"]
-            ),
-            "weekly-review" => format!(
-                "# Weekly Review\n\n\
-                Conduct a comprehensive weekly review:\n\n\
-                **Completed This Week:**\n\
-                - Check closed issues in the last 7 days\n\
-                - Highlight major accomplishments\n\n\
-                **In Progress:**\n\
-                - Review all in-progress tasks\n\
-                - Identify tasks at risk of missing deadlines\n\n\
-                **Upcoming Priorities:**\n\
-                - List critical and high-priority tasks\n\
-                - Suggest quick wins for the week ahead\n\n\
-                **Metrics:**\n\
-                - Total issues opened vs closed\n\
-                - Average time to close\n\
-                - Backlog growth/reduction\n\n\
-                Current state: {} open issues",
-                context_summary["total_open"]
-            ),
-            _ => {
-                return Err(McpError {
-                    code: ErrorCode(-32602),
-                    message: Cow::from(format!("Unknown prompt: {name}")),
-                    data: None,
-                })
-            }
-        };
-
-        Ok(GetPromptResult {
-            description: None,
-            messages: vec![PromptMessage::User {
-                content: Content::text(prompt_text),
-            }],
-        })
     }
 }

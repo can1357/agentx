@@ -1,0 +1,7 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# Issues directory (optional - remove if you want to track issues in git)
+/issues/

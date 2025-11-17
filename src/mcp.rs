@@ -26,6 +26,18 @@ use crate::{
 // Tool parameter structures
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum StatusAction {
+   Start,
+   Block,
+   Done,
+   Close,
+   Reopen,
+   Defer,
+   Activate,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ContextRequest {
    #[schemars(description = "Output format: 'summary', 'detailed', or 'json'")]
    pub format: Option<String>,
@@ -35,8 +47,8 @@ pub struct ContextRequest {
 pub struct CreateIssueRequest {
    #[schemars(description = "Issue title")]
    pub title:      String,
-   #[schemars(description = "Priority: 'critical', 'high', 'medium', or 'low'")]
-   pub priority:   Option<String>,
+   #[schemars(description = "Priority level")]
+   pub priority:   Option<Priority>,
    #[schemars(description = "Tags for categorization")]
    pub tags:       Option<Vec<String>>,
    #[schemars(description = "Files related to this issue")]
@@ -57,8 +69,8 @@ pub struct CreateIssueRequest {
 pub struct UpdateStatusRequest {
    #[schemars(description = "Bug reference (number or alias)")]
    pub bug_ref: String,
-   #[schemars(description = "New status: 'start', 'block', 'done', 'close', or 'reopen'")]
-   pub status:  String,
+   #[schemars(description = "Status action to perform")]
+   pub status:  StatusAction,
    #[schemars(description = "Reason (required for 'block', optional for 'close')")]
    pub reason:  Option<String>,
 }
@@ -91,11 +103,11 @@ pub struct SearchRequest {
    #[schemars(description = "Include closed issues in search. Default: false")]
    pub include_closed: Option<bool>,
 
-   #[schemars(description = "Filter by status (e.g., 'active', 'blocked')")]
-   pub status: Option<String>,
+   #[schemars(description = "Filter by status")]
+   pub status: Option<Status>,
 
-   #[schemars(description = "Filter by priority (e.g., 'critical', 'high')")]
-   pub priority: Option<String>,
+   #[schemars(description = "Filter by priority")]
+   pub priority: Option<Priority>,
 
    #[schemars(description = "Filter by tags (fuzzy matching)")]
    pub tags: Option<Vec<String>>,
@@ -103,12 +115,10 @@ pub struct SearchRequest {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct QueryRequest {
-   #[schemars(
-      description = "Filter by status: 'open', 'active', 'blocked', 'done', 'closed', 'backlog'"
-   )]
-   pub status:        Option<String>,
-   #[schemars(description = "Filter by priority: 'critical', 'high', 'medium', 'low'")]
-   pub priority:      Option<String>,
+   #[schemars(description = "Filter by status")]
+   pub status:        Option<Status>,
+   #[schemars(description = "Filter by priority")]
+   pub priority:      Option<Priority>,
    #[schemars(description = "Filter by maximum effort (e.g., '2h')")]
    pub max_effort:    Option<String>,
    #[schemars(description = "Filter by file path (contains match)")]
@@ -214,7 +224,8 @@ impl IssueTrackerMCP {
       &self,
       Parameters(request): Parameters<CreateIssueRequest>,
    ) -> Result<CallToolResult, McpError> {
-      let priority_str = request.priority.as_deref().unwrap_or("medium");
+      let priority = request.priority.unwrap_or(Priority::Medium);
+      let priority_str = &priority.to_string();
 
       match self.commands.create_issue(
          request.title,
@@ -260,9 +271,9 @@ impl IssueTrackerMCP {
       &self,
       Parameters(request): Parameters<UpdateStatusRequest>,
    ) -> Result<CallToolResult, McpError> {
-      let result = match request.status.as_str() {
-         "start" => self.commands.start(&request.bug_ref, false, false, true),
-         "block" => {
+      let result = match request.status {
+         StatusAction::Start => self.commands.start(&request.bug_ref, false, false, true),
+         StatusAction::Block => {
             let reason = request.reason.ok_or_else(|| McpError {
                code:    ErrorCode(-32602),
                message: Cow::from("Block status requires a reason"),
@@ -270,19 +281,24 @@ impl IssueTrackerMCP {
             })?;
             self.commands.block(&request.bug_ref, reason, true)
          },
-         "close" => self
-            .commands
-            .close(&request.bug_ref, request.reason, false, false, true),
-         "reopen" => self.commands.open(&request.bug_ref, true),
-         "defer" => self.commands.defer(&request.bug_ref, true),
-         "activate" => self.commands.activate(&request.bug_ref, true),
-         _ => {
-            return Err(McpError {
-               code:    ErrorCode(-32602),
-               message: Cow::from(format!("Invalid status: {}", request.status)),
-               data:    None,
-            });
+         StatusAction::Done | StatusAction::Close => {
+            self
+               .commands
+               .close(&request.bug_ref, request.reason, false, false, true)
          },
+         StatusAction::Reopen => self.commands.open(&request.bug_ref, true),
+         StatusAction::Defer => self.commands.defer(&request.bug_ref, true),
+         StatusAction::Activate => self.commands.activate(&request.bug_ref, true),
+      };
+
+      let status_str = match request.status {
+         StatusAction::Start => "start",
+         StatusAction::Block => "block",
+         StatusAction::Done => "done",
+         StatusAction::Close => "close",
+         StatusAction::Reopen => "reopen",
+         StatusAction::Defer => "defer",
+         StatusAction::Activate => "activate",
       };
 
       result
@@ -290,7 +306,7 @@ impl IssueTrackerMCP {
             CallToolResult::success(vec![Content::text(
                serde_json::json!({
                    "success": true,
-                   "status": request.status,
+                   "status": status_str,
                })
                .to_string(),
             )])
@@ -462,15 +478,13 @@ impl IssueTrackerMCP {
             let mut matches = title_match || body_match || files_match;
 
             // Apply status filter if provided
-            if let Some(ref status_filter) = request.status {
-               matches =
-                  matches && issue_with_id.issue.metadata.status.to_string() == *status_filter;
+            if let Some(status_filter) = request.status {
+               matches = matches && issue_with_id.issue.metadata.status == status_filter;
             }
 
             // Apply priority filter if provided
-            if let Some(ref priority_filter) = request.priority {
-               matches =
-                  matches && issue_with_id.issue.metadata.priority.to_string() == *priority_filter;
+            if let Some(priority_filter) = request.priority {
+               matches = matches && issue_with_id.issue.metadata.priority == priority_filter;
             }
 
             matches
@@ -554,20 +568,16 @@ impl IssueTrackerMCP {
          .into_iter()
          .filter(|issue_with_id| {
             // Filter by status
-            if let Some(ref status_filter) = request.status {
-               let status_str = issue_with_id.issue.metadata.status.to_string();
-               if status_str != *status_filter {
+            if let Some(status_filter) = request.status
+               && issue_with_id.issue.metadata.status != status_filter {
                   return false;
                }
-            }
 
             // Filter by priority
-            if let Some(ref priority_filter) = request.priority {
-               let priority_str = issue_with_id.issue.metadata.priority.to_string();
-               if priority_str != *priority_filter {
+            if let Some(priority_filter) = request.priority
+               && issue_with_id.issue.metadata.priority != priority_filter {
                   return false;
                }
-            }
 
             // Filter by effort
             if let Some(max_effort) = max_effort_minutes {

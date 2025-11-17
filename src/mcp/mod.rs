@@ -88,7 +88,7 @@ pub struct SearchRequest {
    #[schemars(description = "Include closed issues in search. Default: false")]
    pub include_closed: Option<bool>,
 
-   #[schemars(description = "Filter by status (e.g., 'in_progress', 'blocked')")]
+   #[schemars(description = "Filter by status (e.g., 'active', 'blocked')")]
    pub status: Option<String>,
 
    #[schemars(description = "Filter by priority (e.g., 'critical', 'high')")]
@@ -97,7 +97,7 @@ pub struct SearchRequest {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct QueryRequest {
-   #[schemars(description = "Filter by status: 'not_started', 'in_progress', 'blocked', 'done'")]
+   #[schemars(description = "Filter by status: 'open', 'active', 'blocked', 'done', 'closed', 'backlog'")]
    pub status:        Option<String>,
    #[schemars(description = "Filter by priority: 'critical', 'high', 'medium', 'low'")]
    pub priority:      Option<String>,
@@ -171,7 +171,7 @@ impl IssueTrackerMCP {
       }
 
       let json_output = serde_json::json!({
-          "in_progress": in_progress.iter().map(|m| serde_json::json!({
+          "active": in_progress.iter().map(|m| serde_json::json!({
               "num": m.id,
               "title": m.title,
               "priority": m.priority.to_string(),

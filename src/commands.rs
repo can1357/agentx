@@ -335,7 +335,7 @@ impl Commands {
         if json {
             let output = json!({
                 "bug_num": bug_num,
-                "status": "in_progress",
+                "status": "active",
                 "branch_created": branch_created,
             });
             println!("{}", serde_json::to_string_pretty(&output)?);
@@ -482,7 +482,7 @@ impl Commands {
         if json {
             let output = json!({
                 "bug_num": bug_num,
-                "status": "not_started",
+                "status": "open",
             });
             println!("{}", serde_json::to_string_pretty(&output)?);
         } else {
@@ -522,7 +522,7 @@ impl Commands {
         if json {
             let output = json!({
                 "bug_num": bug_num,
-                "status": "not_started",
+                "status": "open",
             });
             println!("{}", serde_json::to_string_pretty(&output)?);
         } else {
@@ -637,7 +637,7 @@ impl Commands {
 
         if json {
             let output = json!({
-                "in_progress": in_progress,
+                "active": in_progress,
                 "blocked": blocked,
                 "high_priority": high_priority,
                 "ready_to_start": ready.iter().take(5).collect::<Vec<_>>(),
@@ -1925,8 +1925,8 @@ impl Commands {
                     "low": priority_counts.get(&Priority::Low).unwrap_or(&0),
                 },
                 "by_status": {
-                    "not_started": status_counts.get(&Status::NotStarted).unwrap_or(&0),
-                    "in_progress": status_counts.get(&Status::InProgress).unwrap_or(&0),
+                    "open": status_counts.get(&Status::NotStarted).unwrap_or(&0),
+                    "active": status_counts.get(&Status::InProgress).unwrap_or(&0),
                     "blocked": status_counts.get(&Status::Blocked).unwrap_or(&0),
                     "backlog": status_counts.get(&Status::Backlog).unwrap_or(&0),
                 },

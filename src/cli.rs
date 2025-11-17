@@ -7,6 +7,9 @@ pub struct Cli {
     #[arg(long, global = true, help = "Output in JSON format")]
     pub json: bool,
 
+    #[arg(long, short = 'i', global = true, help = "Force interactive mode")]
+    pub interactive: bool,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -25,10 +28,10 @@ pub enum Command {
     /// Show full issue details
     Show { bug_ref: String },
 
-    /// Create a new issue
+    /// Create a new issue (use -i for interactive mode)
     New {
         #[arg(long)]
-        title: String,
+        title: Option<String>,
 
         #[arg(long, default_value = "medium")]
         priority: String,
@@ -37,13 +40,13 @@ pub enum Command {
         files: Vec<String>,
 
         #[arg(long)]
-        issue: String,
+        issue: Option<String>,
 
         #[arg(long)]
-        impact: String,
+        impact: Option<String>,
 
         #[arg(long)]
-        acceptance: String,
+        acceptance: Option<String>,
 
         #[arg(long)]
         effort: Option<String>,
@@ -193,6 +196,9 @@ pub enum Command {
 
     /// Start MCP server on stdio
     Serve,
+
+    /// Launch interactive TUI dashboard
+    Dash,
 }
 
 #[derive(Subcommand)]

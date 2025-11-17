@@ -3,6 +3,7 @@ use agentx::{
    commands::Commands,
    config::Config,
    guide,
+   interactive::wizards,
    mcp::IssueTrackerMCP,
    storage::Storage,
 };
@@ -15,7 +16,7 @@ async fn main() -> Result<()> {
    let cli = Cli::try_parse()?;
    let config = Config::load();
    let issues_dir = config.resolve_issues_directory();
-   let storage = Storage::new(issues_dir);
+   let storage = Storage::new(issues_dir.clone());
    let commands = Commands::new(storage);
 
    match cli.command {
@@ -26,9 +27,24 @@ async fn main() -> Result<()> {
          commands.show(&bug_ref, cli.json)?;
       },
       Command::New { title, priority, files, issue, impact, acceptance, effort, context } => {
-         commands.create_issue(
-            title, &priority, files, issue, impact, acceptance, effort, context, cli.json,
-         )?;
+         // Check if we should use interactive mode
+         // Interactive mode triggers if: --interactive flag OR missing required fields
+         let use_interactive = cli.interactive || title.is_none() || issue.is_none() || impact.is_none() || acceptance.is_none();
+
+         if use_interactive && atty::is(atty::Stream::Stdin) {
+            let wizard_storage = Storage::new(issues_dir.clone());
+            wizards::new_issue_wizard(&wizard_storage, cli.json)?;
+         } else {
+            // All fields must be present for non-interactive mode
+            let title = title.ok_or_else(|| anyhow::anyhow!("--title is required (use -i for interactive mode)"))?;
+            let issue = issue.ok_or_else(|| anyhow::anyhow!("--issue is required (use -i for interactive mode)"))?;
+            let impact = impact.ok_or_else(|| anyhow::anyhow!("--impact is required (use -i for interactive mode)"))?;
+            let acceptance = acceptance.ok_or_else(|| anyhow::anyhow!("--acceptance is required (use -i for interactive mode)"))?;
+
+            commands.create_issue(
+               title, &priority, files, issue, impact, acceptance, effort, context, cli.json,
+            )?;
+         }
       },
       Command::Start { bug_ref, branch, no_branch } => {
          commands.start(&bug_ref, branch, no_branch, cli.json)?;
@@ -43,8 +59,16 @@ async fn main() -> Result<()> {
          commands.open(&bug_ref, cli.json)?;
       },
       Command::Checkpoint { bug_ref, message } => {
-         let note = message.join(" ");
-         commands.checkpoint(&bug_ref, note, cli.json)?;
+         let use_interactive = cli.interactive || (bug_ref.is_empty() && message.is_empty());
+
+         if use_interactive && atty::is(atty::Stream::Stdin) {
+            let wizard_storage = Storage::new(issues_dir.clone());
+            let bug_ref_opt = if bug_ref.is_empty() { None } else { Some(bug_ref) };
+            wizards::checkpoint_wizard(&wizard_storage, bug_ref_opt, cli.json)?;
+         } else {
+            let note = message.join(" ");
+            commands.checkpoint(&bug_ref, note, cli.json)?;
+         }
       },
       Command::Context => {
          commands.context(cli.json)?;
@@ -59,7 +83,14 @@ async fn main() -> Result<()> {
          commands.ready(cli.json)?;
       },
       Command::Import { file } => {
-         commands.import(file, cli.json)?;
+         let use_interactive = cli.interactive || file.is_none();
+
+         if use_interactive && atty::is(atty::Stream::Stdin) {
+            let wizard_storage = Storage::new(issues_dir.clone());
+            wizards::import_wizard(&wizard_storage, cli.json)?;
+         } else {
+            commands.import(file, cli.json)?;
+         }
       },
       Command::Alias { action } => match action {
          AliasAction::List => {
@@ -91,7 +122,15 @@ async fn main() -> Result<()> {
          commands.dependencies(&bug_ref, cli.json)?;
       },
       Command::Depend { bug_ref, on, remove } => {
-         commands.depend(&bug_ref, on, remove, cli.json)?;
+         let use_interactive = cli.interactive || (bug_ref.is_empty() && on.is_empty() && remove.is_empty());
+
+         if use_interactive && atty::is(atty::Stream::Stdin) {
+            let wizard_storage = Storage::new(issues_dir.clone());
+            let bug_ref_opt = if bug_ref.is_empty() { None } else { Some(bug_ref) };
+            wizards::depend_wizard(&wizard_storage, bug_ref_opt, cli.json)?;
+         } else {
+            commands.depend(&bug_ref, on, remove, cli.json)?;
+         }
       },
       Command::CriticalPath => {
          commands.critical_path(cli.json)?;
@@ -120,23 +159,27 @@ async fn main() -> Result<()> {
          generate(shell_type, &mut cmd, "agentx", &mut std::io::stdout());
       },
       Command::Init { global } => {
-         let config = Config::default();
-         let config_path = if global {
-            dirs::home_dir()
-               .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?
-               .join(".agentxrc.yaml")
+         if cli.interactive && atty::is(atty::Stream::Stdin) {
+            wizards::init_wizard()?;
          } else {
-            std::env::current_dir()?.join(".agentxrc.yaml")
-         };
+            let config = Config::default();
+            let config_path = if global {
+               dirs::home_dir()
+                  .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?
+                  .join(".agentxrc.yaml")
+            } else {
+               std::env::current_dir()?.join(".agentxrc.yaml")
+            };
 
-         if config_path.exists() {
-            eprintln!("Config file already exists at: {}", config_path.display());
-            std::process::exit(1);
+            if config_path.exists() {
+               eprintln!("Config file already exists at: {}", config_path.display());
+               std::process::exit(1);
+            }
+
+            let yaml = serde_yaml::to_string(&config)?;
+            std::fs::write(&config_path, yaml)?;
+            println!("Created config file at: {}", config_path.display());
          }
-
-         let yaml = serde_yaml::to_string(&config)?;
-         std::fs::write(&config_path, yaml)?;
-         println!("Created config file at: {}", config_path.display());
       },
       Command::Serve => {
          IssueTrackerMCP::serve_stdio().await?;
@@ -146,6 +189,10 @@ async fn main() -> Result<()> {
       },
       Command::Activate { bug_ref } => {
          commands.activate(&bug_ref, cli.json)?;
+      },
+      Command::Dash => {
+         let dashboard_storage = Storage::new(issues_dir);
+         agentx::tui::launch_dashboard(dashboard_storage)?;
       },
    }
 

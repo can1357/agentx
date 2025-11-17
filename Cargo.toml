@@ -22,6 +22,25 @@ dirs = "6.0"
 git2 = "0.19"
 strsim = "0.11"
 
+# Interactive Mode (Phase 1)
+dialoguer = "0.11"
+console = "0.15"
+fuzzy-matcher = "0.3"
+syntect = "5.2"
+atty = "0.2"
+
+# TUI Dashboard (Phase 2)
+ratatui = "0.29"
+crossterm = "0.28"
+tui-textarea = "0.6"
+tui-tree-widget = "0.22"
+notify = "7.0"
+unicode-width = "0.2"
+
+# Performance
+rayon = "1.10"
+dashmap = "6.1"
+
 [[bin]]
 name = "agentx"
 path = "src/main.rs"

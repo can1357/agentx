@@ -53,9 +53,11 @@ mod datetime_rfc3339_option {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "lowercase")]
 pub enum Status {
+    #[serde(rename = "open")]
     NotStarted,
+    #[serde(rename = "active")]
     InProgress,
     Blocked,
     Done,
@@ -66,8 +68,8 @@ pub enum Status {
 impl fmt::Display for Status {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotStarted => write!(f, "not_started"),
-            Self::InProgress => write!(f, "in_progress"),
+            Self::NotStarted => write!(f, "open"),
+            Self::InProgress => write!(f, "active"),
             Self::Blocked => write!(f, "blocked"),
             Self::Done => write!(f, "done"),
             Self::Closed => write!(f, "closed"),

@@ -1,19 +1,22 @@
+use crate::config::Config;
 use crate::issue::{Issue, Priority, Status};
 use crate::storage::Storage;
 use crate::utils::parse_effort;
 use anyhow::{Context, Result};
 use chrono::{Duration, Utc};
+use colored::Colorize;
 use serde_json::json;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct Commands {
     storage: Storage,
+    config: Config,
 }
 
 impl Commands {
     pub fn new(storage: Storage) -> Self {
-        Self { storage }
+        Self { storage, config: Config::load() }
     }
 
     pub fn list(&self, status: &str, verbose: bool, json: bool) -> Result<()> {
@@ -47,12 +50,25 @@ impl Commands {
             return Ok(());
         }
 
+        let use_colors = self.config.colored_output;
+
+        // Separate backlog from active issues
+        let (active_issues, backlog_issues): (Vec<_>, Vec<_>) = issues
+            .iter()
+            .partition(|issue| issue.metadata.status != Status::Backlog);
+
         println!("\n{}", "=".repeat(80));
-        println!("{} ISSUES ({} total)", status.to_uppercase(), issues.len());
+        println!(
+            "{} ISSUES ({} active, {} backlog)",
+            status.to_uppercase(),
+            active_issues.len(),
+            backlog_issues.len()
+        );
         println!("{}\n", "=".repeat(80));
 
+        // Display active issues by priority
         let mut by_priority: HashMap<Priority, Vec<&Issue>> = HashMap::new();
-        for issue in &issues {
+        for issue in active_issues {
             by_priority
                 .entry(issue.metadata.priority)
                 .or_default()
@@ -71,24 +87,107 @@ impl Commands {
             }
 
             let bugs = bugs.unwrap();
-            println!("{} ({})", priority.to_string().to_uppercase(), bugs.len());
+            let header = format!("{} ({})", priority.to_string().to_uppercase(), bugs.len());
+            if use_colors {
+                let colored_header = match priority {
+                    Priority::Critical => header.red().bold(),
+                    Priority::High => header.yellow().bold(),
+                    Priority::Medium => header.normal(),
+                    Priority::Low => header.bright_black(),
+                };
+                println!("{}", colored_header);
+            } else {
+                println!("{}", header);
+            }
             println!("{}", "-".repeat(80));
 
             for issue in bugs {
                 let marker = issue.metadata.status.marker();
-                println!(
+                let line = format!(
                     "  {} BUG-{}: {}",
                     marker, issue.metadata.id, issue.metadata.title
                 );
 
+                if use_colors {
+                    let colored_line = match priority {
+                        Priority::Critical => line.red(),
+                        Priority::High => line.yellow(),
+                        Priority::Medium => line.normal(),
+                        Priority::Low => line.bright_black(),
+                    };
+                    println!("{}", colored_line);
+                } else {
+                    println!("{}", line);
+                }
+
                 if issue.metadata.status == Status::Blocked
-                    && let Some(reason) = &issue.metadata.blocked_reason {
-                        println!("       Blocked: {reason}");
+                    && let Some(reason) = &issue.metadata.blocked_reason
+                {
+                    let blocked_line = format!("       Blocked: {reason}");
+                    if use_colors {
+                        println!("{}", blocked_line.bright_red());
+                    } else {
+                        println!("{}", blocked_line);
                     }
+                }
 
                 if verbose && !issue.metadata.files.is_empty() {
                     for file in &issue.metadata.files {
                         println!("       → {file}");
+                    }
+                }
+            }
+            println!();
+        }
+
+        // Display backlog at the end (dimmed)
+        if !backlog_issues.is_empty() {
+            let header = format!("BACKLOG ({})", backlog_issues.len());
+            if use_colors {
+                println!("{}", header.dimmed().bold());
+            } else {
+                println!("{}", header);
+            }
+            println!("{}", "-".repeat(80));
+
+            let mut backlog_by_priority: HashMap<Priority, Vec<&Issue>> = HashMap::new();
+            for issue in backlog_issues {
+                backlog_by_priority
+                    .entry(issue.metadata.priority)
+                    .or_default()
+                    .push(issue);
+            }
+
+            for priority in [
+                Priority::Critical,
+                Priority::High,
+                Priority::Medium,
+                Priority::Low,
+            ] {
+                if let Some(bugs) = backlog_by_priority.get(&priority) {
+                    for issue in bugs {
+                        let marker = issue.metadata.status.marker();
+                        let line = format!(
+                            "  {} BUG-{}: {}",
+                            marker, issue.metadata.id, issue.metadata.title
+                        );
+
+                        if use_colors {
+                            println!("{}", line.dimmed());
+                        } else {
+                            println!("{}", line);
+                        }
+
+                        if verbose && !issue.metadata.files.is_empty() {
+                            for file in &issue.metadata.files {
+                                let file_line = format!("       → {file}");
+                                if use_colors {
+                                    println!("{}", file_line.dimmed());
+                                } else {
+                                    println!("{}", file_line);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -251,6 +350,46 @@ impl Commands {
             println!("{}", serde_json::to_string_pretty(&output)?);
         } else {
             println!("↻ BUG-{bug_num} marked as OPEN");
+        }
+
+        Ok(())
+    }
+
+    pub fn defer(&self, bug_ref: &str, json: bool) -> Result<()> {
+        let bug_num = self.storage.resolve_bug_ref(bug_ref)?;
+
+        self.storage.update_issue_metadata(bug_num, |meta| {
+            meta.status = Status::Backlog;
+        })?;
+
+        if json {
+            let output = json!({
+                "bug_num": bug_num,
+                "status": "backlog",
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        } else {
+            println!("💤 BUG-{bug_num} moved to BACKLOG");
+        }
+
+        Ok(())
+    }
+
+    pub fn activate(&self, bug_ref: &str, json: bool) -> Result<()> {
+        let bug_num = self.storage.resolve_bug_ref(bug_ref)?;
+
+        self.storage.update_issue_metadata(bug_num, |meta| {
+            meta.status = Status::NotStarted;
+        })?;
+
+        if json {
+            let output = json!({
+                "bug_num": bug_num,
+                "status": "not_started",
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        } else {
+            println!("⭕ BUG-{bug_num} activated from BACKLOG");
         }
 
         Ok(())

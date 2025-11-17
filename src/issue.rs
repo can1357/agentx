@@ -60,6 +60,7 @@ pub enum Status {
     Blocked,
     Done,
     Closed,
+    Backlog,
 }
 
 impl fmt::Display for Status {
@@ -70,6 +71,7 @@ impl fmt::Display for Status {
             Self::Blocked => write!(f, "blocked"),
             Self::Done => write!(f, "done"),
             Self::Closed => write!(f, "closed"),
+            Self::Backlog => write!(f, "backlog"),
         }
     }
 }
@@ -82,6 +84,7 @@ impl Status {
             Self::Blocked => "🚫",
             Self::Done => "✅",
             Self::Closed => "✅",
+            Self::Backlog => "💤",
         }
     }
 }

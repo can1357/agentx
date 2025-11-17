@@ -74,6 +74,12 @@ pub enum Command {
     /// Reopen a closed issue
     Open { bug_ref: String },
 
+    /// Move issue to backlog
+    Defer { bug_ref: String },
+
+    /// Activate issue from backlog
+    Activate { bug_ref: String },
+
     /// Add checkpoint to issue
     Checkpoint {
         bug_ref: String,

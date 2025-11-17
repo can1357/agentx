@@ -135,6 +135,12 @@ async fn main() -> Result<()> {
       Command::Serve => {
          IssueTrackerMCP::serve_stdio().await?;
       },
+      Command::Defer { bug_ref } => {
+         commands.defer(&bug_ref, cli.json)?;
+      },
+      Command::Activate { bug_ref } => {
+         commands.activate(&bug_ref, cli.json)?;
+      },
    }
 
    Ok(())

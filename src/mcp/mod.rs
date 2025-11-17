@@ -81,6 +81,21 @@ pub struct QuickWinsRequest {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct SearchRequest {
+   #[schemars(description = "Search query string")]
+   pub query: String,
+
+   #[schemars(description = "Include closed issues in search. Default: false")]
+   pub include_closed: Option<bool>,
+
+   #[schemars(description = "Filter by status (e.g., 'in_progress', 'blocked')")]
+   pub status: Option<String>,
+
+   #[schemars(description = "Filter by priority (e.g., 'critical', 'high')")]
+   pub priority: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct QueryRequest {
    #[schemars(description = "Filter by status: 'not_started', 'in_progress', 'blocked', 'done'")]
    pub status:        Option<String>,
@@ -124,7 +139,7 @@ impl IssueTrackerMCP {
 
    #[tool(
       name = "issues/context",
-      description = "Get current work context - in-progress, blocked, and priority tasks"
+      description = "Get current work context - in-progress, blocked, priority tasks, and backlog count"
    )]
    async fn context(
       &self,
@@ -139,11 +154,13 @@ impl IssueTrackerMCP {
       let mut in_progress = vec![];
       let mut blocked = vec![];
       let mut high_priority = vec![];
+      let mut backlog_count = 0;
 
       for issue in &issues {
          match issue.metadata.status {
             Status::InProgress => in_progress.push(&issue.metadata),
             Status::Blocked => blocked.push(&issue.metadata),
+            Status::Backlog => backlog_count += 1,
             Status::NotStarted => {
                if matches!(issue.metadata.priority, Priority::Critical | Priority::High) {
                   high_priority.push(&issue.metadata);
@@ -169,7 +186,8 @@ impl IssueTrackerMCP {
               "title": m.title,
               "priority": m.priority.to_string(),
           })).collect::<Vec<_>>(),
-          "total_open": issues.len(),
+          "total_open": issues.len() - backlog_count,
+          "backlog_count": backlog_count,
       });
 
       Ok(CallToolResult::success(vec![Content::text(
@@ -221,7 +239,7 @@ impl IssueTrackerMCP {
 
    #[tool(
       name = "issues/status",
-      description = "Update issue status (start, block, done, close, reopen)"
+      description = "Update issue status (start, block, done, close, reopen, defer, activate)"
    )]
    async fn status(
       &self,
@@ -239,6 +257,8 @@ impl IssueTrackerMCP {
          },
          "close" => self.commands.close(&request.bug_ref, request.reason, true),
          "reopen" => self.commands.open(&request.bug_ref, true),
+         "defer" => self.commands.defer(&request.bug_ref, true),
+         "activate" => self.commands.activate(&request.bug_ref, true),
          _ => {
             return Err(McpError {
                code:    ErrorCode(-32602),
@@ -375,6 +395,93 @@ impl IssueTrackerMCP {
    }
 
    #[tool(
+      name = "issues/search",
+      description = "Full-text search across all issues (title, content, metadata)"
+   )]
+   async fn search(
+      &self,
+      Parameters(request): Parameters<SearchRequest>,
+   ) -> Result<CallToolResult, McpError> {
+      let query = request.query.to_lowercase();
+      let include_closed = request.include_closed.unwrap_or(false);
+
+      let mut all_issues = self.storage.list_open_issues().map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to list open issues: {}", e)),
+         data:    None,
+      })?;
+
+      if include_closed {
+         let closed = self.storage.list_closed_issues().map_err(|e| McpError {
+            code:    ErrorCode(-32603),
+            message: Cow::from(format!("Failed to list closed issues: {}", e)),
+            data:    None,
+         })?;
+         all_issues.extend(closed);
+      }
+
+      let matches: Vec<_> = all_issues
+         .iter()
+         .filter(|issue| {
+            // Full-text search in title and body
+            let title_match = issue.metadata.title.to_lowercase().contains(&query);
+            let body_match = issue.body.to_lowercase().contains(&query);
+            let files_match = issue
+               .metadata
+               .files
+               .iter()
+               .any(|f| f.to_lowercase().contains(&query));
+
+            let mut matches = title_match || body_match || files_match;
+
+            // Apply status filter if provided
+            if let Some(ref status_filter) = request.status {
+               matches = matches && issue.metadata.status.to_string() == *status_filter;
+            }
+
+            // Apply priority filter if provided
+            if let Some(ref priority_filter) = request.priority {
+               matches = matches && issue.metadata.priority.to_string() == *priority_filter;
+            }
+
+            matches
+         })
+         .map(|issue| {
+            // Generate snippet from body
+            let body_lower = issue.body.to_lowercase();
+            let snippet = if let Some(pos) = body_lower.find(&query) {
+               let start = pos.saturating_sub(50);
+               let end = (pos + query.len() + 50).min(issue.body.len());
+               let snippet_text = &issue.body[start..end];
+               format!("...{}...", snippet_text.trim())
+            } else {
+               issue.body.lines().next().unwrap_or("").to_string()
+            };
+
+            serde_json::json!({
+                "num": issue.metadata.id,
+                "title": issue.metadata.title,
+                "priority": issue.metadata.priority.to_string(),
+                "status": issue.metadata.status.to_string(),
+                "snippet": snippet,
+                "files": issue.metadata.files,
+                "effort": issue.metadata.effort,
+            })
+         })
+         .collect();
+
+      let result = serde_json::json!({
+          "query": request.query,
+          "matches": matches,
+          "count": matches.len(),
+      });
+
+      Ok(CallToolResult::success(vec![Content::text(
+         serde_json::to_string_pretty(&result).unwrap(),
+      )]))
+   }
+
+   #[tool(
       name = "issues/query",
       description = "Query issues with filters (status, priority, effort, files)"
    )]
@@ -488,9 +595,11 @@ impl ServerHandler for IssueTrackerMCP {
          },
          instructions:     Some(
             "Issue tracker MCP server providing tools for managing tasks and bugs. Use \
-             issues/context to see current work, issues/create to add tasks, issues/checkpoint \
-             for progress notes, issues/query for advanced filtering, and issues/quick_wins to \
-             find low-effort tasks."
+             issues/context to see current work, issues/create to add tasks, issues/status to \
+             update status (start, block, close, defer, activate), issues/checkpoint for progress \
+             notes, issues/search for full-text search, issues/query for advanced filtering, and \
+             issues/wins to find quick-win tasks. Defer non-urgent tasks to backlog with \
+             'defer' status."
                .to_string(),
          ),
       }

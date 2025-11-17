@@ -81,5 +81,5 @@ ADVANCED FEATURES:
 "#;
 
 pub fn print_guide() {
-    println!("{}", AGENT_USAGE_GUIDE);
+   println!("{}", AGENT_USAGE_GUIDE);
 }

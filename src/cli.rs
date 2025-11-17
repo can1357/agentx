@@ -1,214 +1,229 @@
 use clap::{Parser, Subcommand};
+use smol_str::SmolStr;
 
 #[derive(Parser)]
 #[command(name = "agentx")]
 #[command(about = "Issue tracker CLI for structured task/bug tracking")]
 pub struct Cli {
-    #[arg(long, global = true, help = "Output in JSON format")]
-    pub json: bool,
+   #[arg(long, global = true, help = "Output in JSON format")]
+   pub json: bool,
 
-    #[arg(long, short = 'i', global = true, help = "Force interactive mode")]
-    pub interactive: bool,
+   #[arg(long, short = 'i', global = true, help = "Force interactive mode")]
+   pub interactive: bool,
 
-    #[command(subcommand)]
-    pub command: Command,
+   #[command(subcommand)]
+   pub command: Command,
 }
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// List issues
-    List {
-        #[arg(long, default_value = "open")]
-        status: String,
+   /// List issues
+   List {
+      #[arg(long, default_value = "open")]
+      status: SmolStr,
 
-        #[arg(short, long)]
-        verbose: bool,
-    },
+      #[arg(short, long)]
+      verbose: bool,
+   },
 
-    /// Show full issue details
-    Show { bug_ref: String },
+   /// Show full issue details
+   Show { bug_ref: SmolStr },
 
-    /// Create a new issue (use -i for interactive mode)
-    New {
-        #[arg(long)]
-        title: Option<String>,
+   /// Create a new issue (use -i for interactive mode)
+   New {
+      #[arg(long)]
+      title: Option<SmolStr>,
 
-        #[arg(long, default_value = "medium")]
-        priority: String,
+      #[arg(long, default_value = "medium")]
+      priority: SmolStr,
 
-        #[arg(long = "file")]
-        files: Vec<String>,
+      #[arg(long = "tag")]
+      tags: Vec<SmolStr>,
 
-        #[arg(long)]
-        issue: Option<String>,
+      #[arg(long = "file")]
+      files: Vec<SmolStr>,
 
-        #[arg(long)]
-        impact: Option<String>,
+      #[arg(long)]
+      issue: Option<SmolStr>,
 
-        #[arg(long)]
-        acceptance: Option<String>,
+      #[arg(long)]
+      impact: Option<SmolStr>,
 
-        #[arg(long)]
-        effort: Option<String>,
+      #[arg(long)]
+      acceptance: Option<SmolStr>,
 
-        #[arg(long)]
-        context: Option<String>,
-    },
+      #[arg(long)]
+      effort: Option<SmolStr>,
 
-    /// Mark issue as in-progress
-    Start {
-        bug_ref: String,
+      #[arg(long)]
+      context: Option<SmolStr>,
+   },
 
-        #[arg(long, help = "Create git branch (overrides config)")]
-        branch: bool,
+   /// Mark issue as in-progress
+   Start {
+      bug_ref: SmolStr,
 
-        #[arg(long, help = "Skip git branch creation (overrides config)")]
-        no_branch: bool,
-    },
+      #[arg(long, help = "Create git branch (overrides config)")]
+      branch: bool,
 
-    /// Mark issue as blocked
-    Block {
-        bug_ref: String,
+      #[arg(long, help = "Skip git branch creation (overrides config)")]
+      no_branch: bool,
+   },
 
-        #[arg(long)]
-        reason: String,
-    },
+   /// Mark issue as blocked
+   Block {
+      bug_ref: SmolStr,
 
-    /// Mark issue as closed
-    Close {
-        bug_ref: String,
+      #[arg(long)]
+      reason: SmolStr,
+   },
 
-        #[arg(short, long)]
-        message: Option<String>,
+   /// Mark issue as closed
+   Close {
+      bug_ref: SmolStr,
 
-        #[arg(long, help = "Create git commit (overrides config)")]
-        commit: bool,
+      #[arg(short, long)]
+      message: Option<SmolStr>,
 
-        #[arg(long, help = "Skip git commit (overrides config)")]
-        no_commit: bool,
-    },
+      #[arg(long, help = "Create git commit (overrides config)")]
+      commit: bool,
 
-    /// Reopen a closed issue
-    Open { bug_ref: String },
+      #[arg(long, help = "Skip git commit (overrides config)")]
+      no_commit: bool,
+   },
 
-    /// Move issue to backlog
-    Defer { bug_ref: String },
+   /// Reopen a closed issue
+   Open { bug_ref: SmolStr },
 
-    /// Activate issue from backlog
-    Activate { bug_ref: String },
+   /// Move issue to backlog
+   Defer { bug_ref: SmolStr },
 
-    /// Add checkpoint to issue
-    Checkpoint {
-        bug_ref: String,
-        message: Vec<String>,
-    },
+   /// Activate issue from backlog
+   Activate { bug_ref: SmolStr },
 
-    /// Show current work context
-    Context,
+   /// Add checkpoint to issue
+   Checkpoint { bug_ref: SmolStr, message: Vec<SmolStr> },
 
-    /// Show top priority tasks
-    Focus,
+   /// Show current work context
+   Context,
 
-    /// Show blocked tasks
-    Blocked,
+   /// Show top priority tasks
+   Focus,
 
-    /// Show tasks ready to start
-    Ready,
+   /// Show blocked tasks
+   Blocked,
 
-    /// Import multiple issues from YAML
-    Import {
-        #[arg(long)]
-        file: Option<String>,
-    },
+   /// Show tasks ready to start
+   Ready,
 
-    /// Manage bug aliases
-    Alias {
-        #[command(subcommand)]
-        action: AliasAction,
-    },
+   /// Import multiple issues from YAML
+   Import {
+      #[arg(long)]
+      file: Option<SmolStr>,
+   },
 
-    /// Show agent usage guide
-    Guide,
+   /// Manage bug aliases
+   Alias {
+      #[command(subcommand)]
+      action: AliasAction,
+   },
 
-    /// Show quick wins (low-effort tasks)
-    QuickWins {
-        #[arg(long, default_value = "1h")]
-        threshold: String,
-    },
+   /// Show agent usage guide
+   Guide,
 
-    /// Start multiple issues at once
-    BulkStart { bug_refs: Vec<String> },
+   /// Show quick wins (low-effort tasks)
+   QuickWins {
+      #[arg(long, default_value = "1h")]
+      threshold: SmolStr,
+   },
 
-    /// Close multiple issues at once
-    BulkClose {
-        bug_refs: Vec<String>,
+   /// Start multiple issues at once
+   BulkStart { bug_refs: Vec<SmolStr> },
 
-        #[arg(short, long)]
-        message: Option<String>,
-    },
+   /// Close multiple issues at once
+   BulkClose {
+      bug_refs: Vec<SmolStr>,
 
-    /// Show session summary (what changed recently)
-    Summary {
-        #[arg(long, help = "Hours to look back (default: 24)")]
-        hours: Option<u64>,
-    },
+      #[arg(short, long)]
+      message: Option<SmolStr>,
+   },
 
-    /// Show issue dependencies (what it depends on, what depends on it)
-    Dependencies { bug_ref: String },
+   /// Show session summary (what changed recently)
+   Summary {
+      #[arg(long, help = "Hours to look back (default: 24)")]
+      hours: Option<u64>,
+   },
 
-    /// Manage issue dependencies
-    Depend {
-        bug_ref: String,
+   /// Show issue dependencies (what it depends on, what depends on it)
+   Dependencies { bug_ref: SmolStr },
 
-        #[arg(long, value_delimiter = ',')]
-        on: Vec<String>,
+   /// Manage issue dependencies
+   Depend {
+      bug_ref: SmolStr,
 
-        #[arg(long, value_delimiter = ',')]
-        remove: Vec<String>,
-    },
+      #[arg(long, value_delimiter = ',')]
+      on: Vec<SmolStr>,
 
-    /// Find longest dependency chain (critical path)
-    CriticalPath,
+      #[arg(long, value_delimiter = ',')]
+      remove: Vec<SmolStr>,
+   },
 
-    /// Visualize dependency graph as ASCII art
-    DepsGraph {
-        #[arg(long, help = "Show only this issue and its dependencies")]
-        issue: Option<String>,
-    },
+   /// Manage issue tags
+   Tag {
+      bug_ref: SmolStr,
 
-    /// Show performance metrics
-    Metrics {
-        #[arg(long, default_value = "week", help = "Time period: day, week, month, all")]
-        period: String,
-    },
+      #[arg(long, value_delimiter = ',')]
+      add: Vec<SmolStr>,
 
-    /// Generate shell completions
-    Completions {
-        #[arg(value_name = "SHELL")]
-        shell: String,
-    },
+      #[arg(long, value_delimiter = ',')]
+      remove: Vec<SmolStr>,
 
-    /// Initialize config file
-    Init {
-        #[arg(long, help = "Create in home directory instead of current directory")]
-        global: bool,
-    },
+      #[arg(long, short = 'l')]
+      list: bool,
+   },
 
-    /// Start MCP server on stdio
-    Serve,
+   /// Find longest dependency chain (critical path)
+   CriticalPath,
 
-    /// Launch interactive TUI dashboard
-    Dash,
+   /// Visualize dependency graph as ASCII art
+   DepsGraph {
+      #[arg(long, help = "Show only this issue and its dependencies")]
+      issue: Option<SmolStr>,
+   },
+
+   /// Show performance metrics
+   Metrics {
+      #[arg(long, default_value = "week", help = "Time period: day, week, month, all")]
+      period: SmolStr,
+   },
+
+   /// Generate shell completions
+   Completions {
+      #[arg(value_name = "SHELL")]
+      shell: SmolStr,
+   },
+
+   /// Initialize config file
+   Init {
+      #[arg(long, help = "Create in home directory instead of current directory")]
+      global: bool,
+   },
+
+   /// Start MCP server on stdio
+   Serve,
+
+   /// Launch interactive TUI dashboard
+   Dash,
 }
 
 #[derive(Subcommand)]
 pub enum AliasAction {
-    /// List all aliases
-    List,
+   /// List all aliases
+   List,
 
-    /// Add an alias
-    Add { bug_ref: String, alias: String },
+   /// Add an alias
+   Add { bug_ref: SmolStr, alias: SmolStr },
 
-    /// Remove an alias
-    Remove { alias: String },
+   /// Remove an alias
+   Remove { alias: SmolStr },
 }

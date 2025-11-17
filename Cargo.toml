@@ -40,7 +40,4 @@ unicode-width = "0.2"
 # Performance
 rayon = "1.10"
 dashmap = "6.1"
-
-[[bin]]
-name = "agentx"
-path = "src/main.rs"
+smol_str = { version = "0.3.4", features = ["serde"] }

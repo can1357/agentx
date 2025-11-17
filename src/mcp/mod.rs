@@ -18,6 +18,7 @@ use serde::Deserialize;
 
 use crate::{
    commands::Commands,
+   fuzzy::filter_by_tags,
    issue::{Priority, Status},
    storage::Storage,
 };
@@ -36,6 +37,8 @@ pub struct CreateIssueRequest {
    pub title:      String,
    #[schemars(description = "Priority: 'critical', 'high', 'medium', or 'low'")]
    pub priority:   Option<String>,
+   #[schemars(description = "Tags for categorization")]
+   pub tags:       Option<Vec<String>>,
    #[schemars(description = "Files related to this issue")]
    pub files:      Option<Vec<String>>,
    #[schemars(description = "Description of the issue/problem")]
@@ -93,11 +96,16 @@ pub struct SearchRequest {
 
    #[schemars(description = "Filter by priority (e.g., 'critical', 'high')")]
    pub priority: Option<String>,
+
+   #[schemars(description = "Filter by tags (fuzzy matching)")]
+   pub tags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct QueryRequest {
-   #[schemars(description = "Filter by status: 'open', 'active', 'blocked', 'done', 'closed', 'backlog'")]
+   #[schemars(
+      description = "Filter by status: 'open', 'active', 'blocked', 'done', 'closed', 'backlog'"
+   )]
    pub status:        Option<String>,
    #[schemars(description = "Filter by priority: 'critical', 'high', 'medium', 'low'")]
    pub priority:      Option<String>,
@@ -107,6 +115,8 @@ pub struct QueryRequest {
    pub file_contains: Option<String>,
    #[schemars(description = "Maximum number of results")]
    pub limit:         Option<usize>,
+   #[schemars(description = "Filter by tags (fuzzy matching)")]
+   pub tags:          Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -139,7 +149,8 @@ impl IssueTrackerMCP {
 
    #[tool(
       name = "issues/context",
-      description = "Get current work context - in-progress, blocked, priority tasks, and backlog count"
+      description = "Get current work context - in-progress, blocked, priority tasks, and backlog \
+                     count"
    )]
    async fn context(
       &self,
@@ -156,14 +167,17 @@ impl IssueTrackerMCP {
       let mut high_priority = vec![];
       let mut backlog_count = 0;
 
-      for issue in &issues {
-         match issue.metadata.status {
-            Status::InProgress => in_progress.push(&issue.metadata),
-            Status::Blocked => blocked.push(&issue.metadata),
+      for issue_with_id in &issues {
+         match issue_with_id.issue.metadata.status {
+            Status::InProgress => in_progress.push(issue_with_id),
+            Status::Blocked => blocked.push(issue_with_id),
             Status::Backlog => backlog_count += 1,
             Status::NotStarted => {
-               if matches!(issue.metadata.priority, Priority::Critical | Priority::High) {
-                  high_priority.push(&issue.metadata);
+               if matches!(
+                  issue_with_id.issue.metadata.priority,
+                  Priority::Critical | Priority::High
+               ) {
+                  high_priority.push(issue_with_id);
                }
             },
             _ => {},
@@ -171,20 +185,20 @@ impl IssueTrackerMCP {
       }
 
       let json_output = serde_json::json!({
-          "active": in_progress.iter().map(|m| serde_json::json!({
-              "num": m.id,
-              "title": m.title,
-              "priority": m.priority.to_string(),
+          "active": in_progress.iter().map(|i| serde_json::json!({
+              "num": i.id,
+              "title": i.issue.metadata.title,
+              "priority": i.issue.metadata.priority.to_string(),
           })).collect::<Vec<_>>(),
-          "blocked": blocked.iter().map(|m| serde_json::json!({
-              "num": m.id,
-              "title": m.title,
-              "reason": m.blocked_reason,
+          "blocked": blocked.iter().map(|i| serde_json::json!({
+              "num": i.id,
+              "title": i.issue.metadata.title,
+              "reason": i.issue.metadata.blocked_reason,
           })).collect::<Vec<_>>(),
-          "high_priority": high_priority.iter().map(|m| serde_json::json!({
-              "num": m.id,
-              "title": m.title,
-              "priority": m.priority.to_string(),
+          "high_priority": high_priority.iter().map(|i| serde_json::json!({
+              "num": i.id,
+              "title": i.issue.metadata.title,
+              "priority": i.issue.metadata.priority.to_string(),
           })).collect::<Vec<_>>(),
           "total_open": issues.len() - backlog_count,
           "backlog_count": backlog_count,
@@ -205,6 +219,7 @@ impl IssueTrackerMCP {
       match self.commands.create_issue(
          request.title,
          priority_str,
+         request.tags.unwrap_or_default(),
          request.files.unwrap_or_default(),
          request.issue,
          request.impact,
@@ -222,7 +237,7 @@ impl IssueTrackerMCP {
 
             let result = serde_json::json!({
                 "bug_num": bug_num,
-                "message": format!("Created BUG-{}", bug_num),
+                "message": format!("Created {}", self.commands.config().format_issue_ref(bug_num)),
             });
 
             Ok(CallToolResult::success(vec![Content::text(
@@ -255,7 +270,9 @@ impl IssueTrackerMCP {
             })?;
             self.commands.block(&request.bug_ref, reason, true)
          },
-         "close" => self.commands.close(&request.bug_ref, request.reason, false, false, true),
+         "close" => self
+            .commands
+            .close(&request.bug_ref, request.reason, false, false, true),
          "reopen" => self.commands.open(&request.bug_ref, true),
          "defer" => self.commands.defer(&request.bug_ref, true),
          "activate" => self.commands.activate(&request.bug_ref, true),
@@ -313,9 +330,10 @@ impl IssueTrackerMCP {
       &self,
       Parameters(request): Parameters<CheckpointRequest>,
    ) -> Result<CallToolResult, McpError> {
+      let message = request.message.clone();
       self
          .commands
-         .checkpoint(&request.bug_ref, request.message.clone(), true)
+         .checkpoint(&request.bug_ref, request.message, true)
          .map_err(|e| McpError {
             code:    ErrorCode(-32603),
             message: Cow::from(format!("Failed to add checkpoint: {}", e)),
@@ -334,7 +352,7 @@ impl IssueTrackerMCP {
       let result = serde_json::json!({
           "success": true,
           "bug_num": bug_num,
-          "message": request.message,
+          "message": message,
       });
 
       Ok(CallToolResult::success(vec![Content::text(
@@ -363,22 +381,25 @@ impl IssueTrackerMCP {
 
       let quick: Vec<_> = issues
          .iter()
-         .filter(|i| {
-            i.metadata
+         .filter(|issue_with_id| {
+            issue_with_id
+               .issue
+               .metadata
                .effort
                .as_ref()
                .and_then(|e| crate::utils::parse_effort(e).ok())
                .map(|m| m <= threshold_minutes)
                .unwrap_or(false)
          })
-         .map(|issue| {
+         .map(|issue_with_id| {
             serde_json::json!({
-                "num": issue.metadata.id,
-                "title": issue.metadata.title,
-                "priority": issue.metadata.priority.to_string(),
-                "effort": issue.metadata.effort,
-                "status": issue.metadata.status.to_string(),
-                "files": issue.metadata.files,
+                "num": issue_with_id.id,
+                "title": issue_with_id.issue.metadata.title,
+                "priority": issue_with_id.issue.metadata.priority.to_string(),
+                "effort": issue_with_id.issue.metadata.effort,
+                "status": issue_with_id.issue.metadata.status.to_string(),
+                "files": issue_with_id.issue.metadata.files,
+                "tags": issue_with_id.issue.metadata.tags,
             })
          })
          .collect();
@@ -420,13 +441,19 @@ impl IssueTrackerMCP {
          all_issues.extend(closed);
       }
 
-      let matches: Vec<_> = all_issues
-         .iter()
-         .filter(|issue| {
+      let mut matches: Vec<_> = all_issues
+         .into_iter()
+         .filter(|issue_with_id| {
             // Full-text search in title and body
-            let title_match = issue.metadata.title.to_lowercase().contains(&query);
-            let body_match = issue.body.to_lowercase().contains(&query);
-            let files_match = issue
+            let title_match = issue_with_id
+               .issue
+               .metadata
+               .title
+               .to_lowercase()
+               .contains(&query);
+            let body_match = issue_with_id.issue.body.to_lowercase().contains(&query);
+            let files_match = issue_with_id
+               .issue
                .metadata
                .files
                .iter()
@@ -436,44 +463,62 @@ impl IssueTrackerMCP {
 
             // Apply status filter if provided
             if let Some(ref status_filter) = request.status {
-               matches = matches && issue.metadata.status.to_string() == *status_filter;
+               matches =
+                  matches && issue_with_id.issue.metadata.status.to_string() == *status_filter;
             }
 
             // Apply priority filter if provided
             if let Some(ref priority_filter) = request.priority {
-               matches = matches && issue.metadata.priority.to_string() == *priority_filter;
+               matches =
+                  matches && issue_with_id.issue.metadata.priority.to_string() == *priority_filter;
             }
 
             matches
          })
-         .map(|issue| {
+         .collect();
+
+      // Apply fuzzy tag filter if provided
+      if let Some(ref tags) = request.tags {
+         matches = filter_by_tags(matches, tags);
+      }
+
+      let results: Vec<_> = matches
+         .iter()
+         .map(|issue_with_id| {
             // Generate snippet from body
-            let body_lower = issue.body.to_lowercase();
+            let body_lower = issue_with_id.issue.body.to_lowercase();
             let snippet = if let Some(pos) = body_lower.find(&query) {
                let start = pos.saturating_sub(50);
-               let end = (pos + query.len() + 50).min(issue.body.len());
-               let snippet_text = &issue.body[start..end];
+               let end = (pos + query.len() + 50).min(issue_with_id.issue.body.len());
+               let snippet_text = &issue_with_id.issue.body[start..end];
                format!("...{}...", snippet_text.trim())
             } else {
-               issue.body.lines().next().unwrap_or("").to_string()
+               issue_with_id
+                  .issue
+                  .body
+                  .lines()
+                  .next()
+                  .unwrap_or("")
+                  .to_string()
             };
 
             serde_json::json!({
-                "num": issue.metadata.id,
-                "title": issue.metadata.title,
-                "priority": issue.metadata.priority.to_string(),
-                "status": issue.metadata.status.to_string(),
+                "num": issue_with_id.id,
+                "title": issue_with_id.issue.metadata.title,
+                "priority": issue_with_id.issue.metadata.priority.to_string(),
+                "status": issue_with_id.issue.metadata.status.to_string(),
                 "snippet": snippet,
-                "files": issue.metadata.files,
-                "effort": issue.metadata.effort,
+                "files": issue_with_id.issue.metadata.files,
+                "effort": issue_with_id.issue.metadata.effort,
+                "tags": issue_with_id.issue.metadata.tags,
             })
          })
          .collect();
 
       let result = serde_json::json!({
           "query": request.query,
-          "matches": matches,
-          "count": matches.len(),
+          "matches": results,
+          "count": results.len(),
       });
 
       Ok(CallToolResult::success(vec![Content::text(
@@ -505,12 +550,12 @@ impl IssueTrackerMCP {
          None
       };
 
-      let filtered: Vec<_> = issues
-         .iter()
-         .filter(|issue| {
+      let mut filtered: Vec<_> = issues
+         .into_iter()
+         .filter(|issue_with_id| {
             // Filter by status
             if let Some(ref status_filter) = request.status {
-               let status_str = issue.metadata.status.to_string();
+               let status_str = issue_with_id.issue.metadata.status.to_string();
                if status_str != *status_filter {
                   return false;
                }
@@ -518,7 +563,7 @@ impl IssueTrackerMCP {
 
             // Filter by priority
             if let Some(ref priority_filter) = request.priority {
-               let priority_str = issue.metadata.priority.to_string();
+               let priority_str = issue_with_id.issue.metadata.priority.to_string();
                if priority_str != *priority_filter {
                   return false;
                }
@@ -526,7 +571,7 @@ impl IssueTrackerMCP {
 
             // Filter by effort
             if let Some(max_effort) = max_effort_minutes {
-               if let Some(ref effort) = issue.metadata.effort {
+               if let Some(ref effort) = issue_with_id.issue.metadata.effort {
                   if let Ok(effort_minutes) = crate::utils::parse_effort(effort)
                      && effort_minutes > max_effort
                   {
@@ -540,22 +585,37 @@ impl IssueTrackerMCP {
 
             // Filter by file path
             if let Some(ref file_filter) = request.file_contains
-               && !issue.metadata.files.iter().any(|f| f.contains(file_filter))
+               && !issue_with_id
+                  .issue
+                  .metadata
+                  .files
+                  .iter()
+                  .any(|f| f.contains(file_filter))
             {
                return false;
             }
 
             true
          })
+         .collect();
+
+      // Apply fuzzy tag filter if provided
+      if let Some(ref tags) = request.tags {
+         filtered = filter_by_tags(filtered, tags);
+      }
+
+      let results: Vec<_> = filtered
+         .iter()
          .take(request.limit.unwrap_or(100))
-         .map(|issue| {
+         .map(|issue_with_id| {
             serde_json::json!({
-                "num": issue.metadata.id,
-                "title": issue.metadata.title,
-                "priority": issue.metadata.priority.to_string(),
-                "status": issue.metadata.status.to_string(),
-                "effort": issue.metadata.effort,
-                "files": issue.metadata.files,
+                "num": issue_with_id.id,
+                "title": issue_with_id.issue.metadata.title,
+                "priority": issue_with_id.issue.metadata.priority.to_string(),
+                "status": issue_with_id.issue.metadata.status.to_string(),
+                "effort": issue_with_id.issue.metadata.effort,
+                "files": issue_with_id.issue.metadata.files,
+                "tags": issue_with_id.issue.metadata.tags,
             })
          })
          .collect();
@@ -566,9 +626,10 @@ impl IssueTrackerMCP {
               "priority": request.priority,
               "max_effort": request.max_effort,
               "file_contains": request.file_contains,
+              "tags": request.tags,
           },
-          "issues": filtered,
-          "count": filtered.len(),
+          "issues": results,
+          "count": results.len(),
       });
 
       Ok(CallToolResult::success(vec![Content::text(
@@ -598,8 +659,8 @@ impl ServerHandler for IssueTrackerMCP {
              issues/context to see current work, issues/create to add tasks, issues/status to \
              update status (start, block, close, defer, activate), issues/checkpoint for progress \
              notes, issues/search for full-text search, issues/query for advanced filtering, and \
-             issues/wins to find quick-win tasks. Defer non-urgent tasks to backlog with \
-             'defer' status."
+             issues/wins to find quick-win tasks. Defer non-urgent tasks to backlog with 'defer' \
+             status."
                .to_string(),
          ),
       }
@@ -625,15 +686,21 @@ impl ServerHandler for IssueTrackerMCP {
       let mut resources = Vec::new();
 
       // Add open issues
-      for issue in open_issues {
+      for issue_with_id in open_issues {
          resources.push(Annotated::new(
             RawResource {
-               uri:         format!("issue://{}", issue.metadata.id),
-               name:        format!("BUG-{}: {}", issue.metadata.id, issue.metadata.title),
+               uri:         format!("issue://{}", issue_with_id.id),
+               name:        format!(
+                  "{}: {}",
+                  self.commands.config().format_issue_ref(issue_with_id.id),
+                  issue_with_id.issue.metadata.title
+               ),
                title:       None,
                description: Some(format!(
                   "[{}] {} - {}",
-                  issue.metadata.status, issue.metadata.priority, issue.metadata.title
+                  issue_with_id.issue.metadata.status,
+                  issue_with_id.issue.metadata.priority,
+                  issue_with_id.issue.metadata.title
                )),
                mime_type:   Some("text/markdown".into()),
                size:        None,
@@ -644,13 +711,17 @@ impl ServerHandler for IssueTrackerMCP {
       }
 
       // Add closed issues
-      for issue in closed_issues {
+      for issue_with_id in closed_issues {
          resources.push(Annotated::new(
             RawResource {
-               uri:         format!("issue://{}", issue.metadata.id),
-               name:        format!("BUG-{}: {} (closed)", issue.metadata.id, issue.metadata.title),
+               uri:         format!("issue://{}", issue_with_id.id),
+               name:        format!(
+                  "{}: {} (closed)",
+                  self.commands.config().format_issue_ref(issue_with_id.id),
+                  issue_with_id.issue.metadata.title
+               ),
                title:       None,
-               description: Some(format!("[closed] {}", issue.metadata.title)),
+               description: Some(format!("[closed] {}", issue_with_id.issue.metadata.title)),
                mime_type:   Some("text/markdown".into()),
                size:        None,
                icons:       None,

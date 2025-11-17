@@ -41,6 +41,10 @@ pub enum Action {
    Down,
    Left,
    Right,
+   PageUp,
+   PageDown,
+   Home,
+   End,
    Select,
    Back,
    Help,
@@ -78,6 +82,10 @@ pub fn key_to_action(key: KeyEvent) -> Action {
       KeyCode::Down | KeyCode::Char('j') => Action::Down,
       KeyCode::Left | KeyCode::Char('h') => Action::Left,
       KeyCode::Right | KeyCode::Char('l') => Action::Right,
+      KeyCode::PageUp => Action::PageUp,
+      KeyCode::PageDown => Action::PageDown,
+      KeyCode::Home | KeyCode::Char('g') => Action::Home,
+      KeyCode::End | KeyCode::Char('G') => Action::End,
 
       // Actions
       KeyCode::Enter | KeyCode::Char(' ') => Action::Select,
@@ -101,12 +109,37 @@ pub fn key_to_action(key: KeyEvent) -> Action {
       KeyCode::Char('e') => Action::Edit,
       KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => Action::Delete,
 
-      // View switching
-      KeyCode::Char('1') => Action::SwitchView(ViewMode::Dashboard),
-      KeyCode::Char('2') => Action::SwitchView(ViewMode::Kanban),
-      KeyCode::Char('3') => Action::SwitchView(ViewMode::List),
-      KeyCode::Char('4') => Action::SwitchView(ViewMode::Metrics),
-      KeyCode::Char('5') => Action::SwitchView(ViewMode::Graph),
+      // View switching (only when not using modifiers)
+      KeyCode::Char('1')
+         if !key.modifiers.contains(KeyModifiers::CONTROL)
+            && !key.modifiers.contains(KeyModifiers::ALT) =>
+      {
+         Action::SwitchView(ViewMode::Dashboard)
+      },
+      KeyCode::Char('2')
+         if !key.modifiers.contains(KeyModifiers::CONTROL)
+            && !key.modifiers.contains(KeyModifiers::ALT) =>
+      {
+         Action::SwitchView(ViewMode::Kanban)
+      },
+      KeyCode::Char('3')
+         if !key.modifiers.contains(KeyModifiers::CONTROL)
+            && !key.modifiers.contains(KeyModifiers::ALT) =>
+      {
+         Action::SwitchView(ViewMode::List)
+      },
+      KeyCode::Char('4')
+         if !key.modifiers.contains(KeyModifiers::CONTROL)
+            && !key.modifiers.contains(KeyModifiers::ALT) =>
+      {
+         Action::SwitchView(ViewMode::Metrics)
+      },
+      KeyCode::Char('5')
+         if !key.modifiers.contains(KeyModifiers::CONTROL)
+            && !key.modifiers.contains(KeyModifiers::ALT) =>
+      {
+         Action::SwitchView(ViewMode::Graph)
+      },
 
       _ => Action::None,
    }

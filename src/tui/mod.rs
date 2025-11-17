@@ -7,7 +7,7 @@ use std::{io, time::Duration};
 
 use anyhow::Result;
 use crossterm::{
-   event::{DisableMouseCapture, EnableMouseCapture},
+   event::{DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEvent},
    execute,
    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -19,13 +19,27 @@ use views::DashboardView;
 use crate::{config::Config, issue::IssueWithId, storage::Storage};
 
 pub struct App {
-   storage:       Storage,
-   issues:        Vec<IssueWithId>,
-   theme:         Theme,
-   config:        Config,
-   current_view:  ViewMode,
-   selected_pane: usize,
-   should_quit:   bool,
+   storage:             Storage,
+   issues:              Vec<IssueWithId>,
+   theme:               Theme,
+   config:              Config,
+   current_view:        ViewMode,
+   selected_pane:       usize,
+   selected_column:     usize,
+   selected_item:       usize,
+   scroll_offset:       usize,
+   column_scroll_state: [usize; 5],
+   mode:                AppMode,
+   search_query:        String,
+   search_results:      Vec<(usize, usize)>,
+   current_search_idx:  usize,
+   should_quit:         bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppMode {
+   Normal,
+   Search,
 }
 
 impl App {
@@ -40,6 +54,14 @@ impl App {
          config: Config::load(),
          current_view: ViewMode::Dashboard,
          selected_pane: 0,
+         selected_column: 1,
+         selected_item: 0,
+         scroll_offset: 0,
+         column_scroll_state: [0; 5],
+         mode: AppMode::Normal,
+         search_query: String::new(),
+         search_results: Vec::new(),
+         current_search_idx: 0,
          should_quit: false,
       })
    }
@@ -66,15 +88,246 @@ impl App {
             };
          },
          Action::Up => {
-            // Navigate up in current pane
+            self.move_selection_vertical(-1);
          },
          Action::Down => {
-            // Navigate down in current pane
+            self.move_selection_vertical(1);
+         },
+         Action::Left => {
+            self.move_selection_horizontal(-1);
+         },
+         Action::Right => {
+            self.move_selection_horizontal(1);
+         },
+         Action::PageUp => {
+            self.move_selection_vertical(-5);
+         },
+         Action::PageDown => {
+            self.move_selection_vertical(5);
+         },
+         Action::Home => {
+            if self.current_view == ViewMode::Dashboard && self.selected_pane == 0 {
+               let all_items = self.all_issues_flattened();
+               for (idx, (issue, _)) in all_items.iter().enumerate() {
+                  if issue.is_some() {
+                     self.selected_item = idx;
+                     self.column_scroll_state[self.selected_column] = 0;
+                     break;
+                  }
+               }
+            }
+         },
+         Action::End => {
+            if self.current_view == ViewMode::Dashboard && self.selected_pane == 0 {
+               let all_items = self.all_issues_flattened();
+               for (idx, (issue, _)) in all_items.iter().enumerate().rev() {
+                  if issue.is_some() {
+                     self.selected_item = idx;
+                     self.update_scroll_for_item();
+                     break;
+                  }
+               }
+            }
+         },
+         Action::Search => {
+            self.mode = AppMode::Search;
+            self.search_query.clear();
+         },
+         Action::Select => {
+            if self.current_view == ViewMode::Dashboard && self.selected_pane == 0 {
+               let all_items = self.all_issues_flattened();
+               if let Some((Some(issue), _)) = all_items.get(self.selected_item) {
+                  // TODO: Open issue detail view
+                  eprintln!("Selected issue: {}", issue.id);
+               }
+            }
          },
          _ => {},
       }
 
       Ok(())
+   }
+
+   fn all_issues_flattened(&self) -> Vec<(Option<&IssueWithId>, String)> {
+      use crate::issue::Status;
+
+      let statuses = [
+         (Status::Backlog, "BACKLOG"),
+         (Status::NotStarted, "READY"),
+         (Status::InProgress, "IN PROGRESS"),
+         (Status::Blocked, "BLOCKED"),
+         (Status::Done, "DONE"),
+      ];
+
+      let mut result = Vec::new();
+
+      for (status, status_name) in &statuses {
+         let issues: Vec<_> = self
+            .issues
+            .iter()
+            .filter(|i| i.issue.metadata.status == *status)
+            .collect();
+
+         if !issues.is_empty() {
+            result.push((None, status_name.to_string()));
+            for issue in issues {
+               result.push((Some(issue), String::new()));
+            }
+         }
+      }
+
+      result
+   }
+
+   fn move_selection_vertical(&mut self, delta: i32) {
+      if self.current_view != ViewMode::Dashboard || self.selected_pane != 0 {
+         return;
+      }
+
+      let all_items = self.all_issues_flattened();
+      if all_items.is_empty() {
+         self.selected_item = 0;
+         self.column_scroll_state[self.selected_column] = 0;
+         return;
+      }
+
+      let len = all_items.len() as i32;
+      let mut idx = self.selected_item as i32 + delta;
+
+      loop {
+         if idx < 0 {
+            idx = 0;
+            break;
+         }
+         if idx >= len {
+            idx = len - 1;
+            break;
+         }
+
+         if all_items
+            .get(idx as usize)
+            .and_then(|(issue, _)| *issue)
+            .is_some()
+         {
+            break;
+         }
+
+         idx += delta.signum();
+      }
+
+      self.selected_item = idx as usize;
+      self.update_scroll_for_item();
+   }
+
+   fn update_scroll_for_item(&mut self) {
+      const VISIBLE_ITEMS_PER_SECTION: usize = 3;
+
+      let scroll = &mut self.column_scroll_state[self.selected_column];
+
+      if self.selected_item < *scroll {
+         *scroll = self.selected_item;
+      } else if self.selected_item >= *scroll + VISIBLE_ITEMS_PER_SECTION {
+         *scroll = self
+            .selected_item
+            .saturating_sub(VISIBLE_ITEMS_PER_SECTION - 1);
+      }
+   }
+
+   fn move_selection_horizontal(&mut self, _delta: i32) {
+      // Not used in unified list view
+   }
+
+   fn handle_search_key(&mut self, key: KeyEvent) -> Result<()> {
+      match key.code {
+         KeyCode::Esc => {
+            self.mode = AppMode::Normal;
+            self.search_results.clear();
+            self.current_search_idx = 0;
+         },
+         KeyCode::Enter => {
+            if !self.search_results.is_empty() {
+               let (col, idx) = self.search_results[self.current_search_idx];
+               self.selected_column = col;
+               self.selected_item = idx;
+               self.update_scroll_for_item();
+               self.current_search_idx = (self.current_search_idx + 1) % self.search_results.len();
+            }
+         },
+         KeyCode::Backspace => {
+            self.search_query.pop();
+            self.update_search_results();
+         },
+         KeyCode::Char(c) => {
+            self.search_query.push(c);
+            self.update_search_results();
+         },
+         KeyCode::Down | KeyCode::Tab => {
+            if !self.search_results.is_empty() {
+               self.current_search_idx = (self.current_search_idx + 1) % self.search_results.len();
+               let (col, idx) = self.search_results[self.current_search_idx];
+               self.selected_column = col;
+               self.selected_item = idx;
+               self.update_scroll_for_item();
+            }
+         },
+         KeyCode::Up | KeyCode::BackTab => {
+            if !self.search_results.is_empty() {
+               self.current_search_idx = if self.current_search_idx == 0 {
+                  self.search_results.len() - 1
+               } else {
+                  self.current_search_idx - 1
+               };
+               let (col, idx) = self.search_results[self.current_search_idx];
+               self.selected_column = col;
+               self.selected_item = idx;
+               self.update_scroll_for_item();
+            }
+         },
+         _ => {},
+      }
+      Ok(())
+   }
+
+   fn update_search_results(&mut self) {
+      self.search_results = self.find_all_matching(&self.search_query);
+      self.current_search_idx = 0;
+      if !self.search_results.is_empty() {
+         let (col, idx) = self.search_results[0];
+         self.selected_column = col;
+         self.selected_item = idx;
+         self.update_scroll_for_item();
+      }
+   }
+
+   fn find_all_matching(&self, query: &str) -> Vec<(usize, usize)> {
+      if query.is_empty() {
+         return Vec::new();
+      }
+
+      let q = query.to_lowercase();
+      let mut results = Vec::new();
+      let all_items = self.all_issues_flattened();
+
+      for (idx, (issue_opt, _)) in all_items.iter().enumerate() {
+         if let Some(issue) = issue_opt
+            && (issue.issue.metadata.title.to_lowercase().contains(&q)
+               || self
+                  .config
+                  .format_issue_ref(issue.id)
+                  .to_lowercase()
+                  .contains(&q)
+               || issue
+                  .issue
+                  .metadata
+                  .tags
+                  .iter()
+                  .any(|t| t.to_lowercase().contains(&q)))
+         {
+            results.push((0, idx));
+         }
+      }
+
+      results
    }
 
    pub fn run(&mut self) -> Result<()> {
@@ -95,8 +348,23 @@ impl App {
 
             match self.current_view {
                ViewMode::Dashboard => {
+                  let (search_query, search_count) = if self.mode == AppMode::Search {
+                     (
+                        Some(self.search_query.as_str()),
+                        if self.search_results.is_empty() {
+                           None
+                        } else {
+                           Some((self.current_search_idx + 1, self.search_results.len()))
+                        },
+                     )
+                  } else {
+                     (None, None)
+                  };
                   let dashboard = DashboardView::new(&self.issues, self.theme, &self.config)
-                     .selected_pane(self.selected_pane);
+                     .selected_pane(self.selected_pane)
+                     .selection(self.selected_column, self.selected_item)
+                     .scroll_state(self.scroll_offset, self.column_scroll_state)
+                     .search_state(search_query, search_count);
                   f.render_widget(dashboard, size);
                },
                ViewMode::Kanban => {
@@ -118,9 +386,14 @@ impl App {
 
          // Handle events
          match event_handler.next()? {
-            Event::Key(key) => {
-               let action = key_to_action(key);
-               self.handle_action(action)?;
+            Event::Key(key) => match self.mode {
+               AppMode::Normal => {
+                  let action = key_to_action(key);
+                  self.handle_action(action)?;
+               },
+               AppMode::Search => {
+                  self.handle_search_key(key)?;
+               },
             },
             Event::Resize => {
                // Terminal was resized, will redraw on next iteration

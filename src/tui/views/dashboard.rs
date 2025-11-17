@@ -15,19 +15,54 @@ use crate::{
 };
 
 pub struct DashboardView<'a> {
-   issues:        &'a [IssueWithId],
-   theme:         Theme,
-   config:        &'a Config,
-   selected_pane: usize,
+   issues:              &'a [IssueWithId],
+   theme:               Theme,
+   config:              &'a Config,
+   selected_pane:       usize,
+   selected_column:     usize,
+   selected_item:       usize,
+   scroll_offset:       usize,
+   column_scroll_state: [usize; 5],
+   search_query:        Option<&'a str>,
+   search_count:        Option<(usize, usize)>,
 }
 
 impl<'a> DashboardView<'a> {
    pub fn new(issues: &'a [IssueWithId], theme: Theme, config: &'a Config) -> Self {
-      Self { issues, theme, config, selected_pane: 0 }
+      Self {
+         issues,
+         theme,
+         config,
+         selected_pane: 0,
+         selected_column: 1,
+         selected_item: 0,
+         scroll_offset: 0,
+         column_scroll_state: [0; 5],
+         search_query: None,
+         search_count: None,
+      }
    }
 
    pub fn selected_pane(mut self, pane: usize) -> Self {
       self.selected_pane = pane;
+      self
+   }
+
+   pub fn selection(mut self, column: usize, item: usize) -> Self {
+      self.selected_column = column;
+      self.selected_item = item;
+      self
+   }
+
+   pub fn scroll_state(mut self, offset: usize, column_state: [usize; 5]) -> Self {
+      self.scroll_offset = offset;
+      self.column_scroll_state = column_state;
+      self
+   }
+
+   pub fn search_state(mut self, query: Option<&'a str>, count: Option<(usize, usize)>) -> Self {
+      self.search_query = query;
+      self.search_count = count;
       self
    }
 
@@ -54,7 +89,7 @@ impl<'a> DashboardView<'a> {
          })
          .count();
 
-      let lines = vec![
+      let mut lines = vec![
          Line::from(vec![
             Span::raw("  "),
             Span::styled("AgentX", self.theme.title_style()),
@@ -76,6 +111,26 @@ impl<'a> DashboardView<'a> {
          ]),
       ];
 
+      if let Some(q) = self.search_query {
+         let mut search_line = vec![
+            Span::raw("  "),
+            Span::styled("/ ", self.theme.dim_style()),
+            Span::styled(q, self.theme.title_style()),
+            Span::raw("_"),
+         ];
+
+         if let Some((current, total)) = self.search_count {
+            search_line.push(Span::raw("  "));
+            search_line
+               .push(Span::styled(format!("[{}/{}]", current, total), self.theme.success()));
+         } else if !q.is_empty() {
+            search_line.push(Span::raw("  "));
+            search_line.push(Span::styled("[0 results]", self.theme.dim_style()));
+         }
+
+         lines.push(Line::from(search_line));
+      }
+
       let block = Block::default()
          .borders(Borders::NONE)
          .style(self.theme.header_style());
@@ -85,21 +140,35 @@ impl<'a> DashboardView<'a> {
    }
 
    fn render_footer(&self, area: Rect, buf: &mut Buffer) {
-      let footer = Line::from(vec![
-         Span::raw("  "), // Leading space
-         Span::styled("[F1]", self.theme.dim_style()),
-         Span::raw(" Help  "),
-         Span::styled("[F2]", self.theme.dim_style()),
-         Span::raw(" Filter  "),
-         Span::styled("[F3]", self.theme.dim_style()),
-         Span::raw(" Sort  "),
-         Span::styled("[/]", self.theme.dim_style()),
-         Span::raw(" Search  "),
-         Span::styled("[n]", self.theme.dim_style()),
-         Span::raw(" New  "),
-         Span::styled("[q]", self.theme.dim_style()),
-         Span::raw(" Quit"),
-      ]);
+      let footer = if self.search_query.is_some() {
+         Line::from(vec![
+            Span::raw("  "),
+            Span::styled("[Search Mode]", self.theme.title_style()),
+            Span::raw("  "),
+            Span::styled("↑↓/Tab", self.theme.dim_style()),
+            Span::raw(" Next/Prev  "),
+            Span::styled("Enter", self.theme.dim_style()),
+            Span::raw(" Jump & Continue  "),
+            Span::styled("Esc", self.theme.dim_style()),
+            Span::raw(" Cancel"),
+         ])
+      } else {
+         Line::from(vec![
+            Span::raw("  "),
+            Span::styled("↑↓←→/hjkl", self.theme.dim_style()),
+            Span::raw(" Nav  "),
+            Span::styled("PgUp/Dn", self.theme.dim_style()),
+            Span::raw(" Scroll  "),
+            Span::styled("g/G", self.theme.dim_style()),
+            Span::raw(" Top/End  "),
+            Span::styled("/", self.theme.dim_style()),
+            Span::raw(" Search  "),
+            Span::styled("Tab", self.theme.dim_style()),
+            Span::raw(" Panes  "),
+            Span::styled("q", self.theme.dim_style()),
+            Span::raw(" Quit"),
+         ])
+      };
 
       Paragraph::new(footer)
          .style(self.theme.dim_style())
@@ -198,12 +267,14 @@ impl<'a> DashboardView<'a> {
 
 impl Widget for DashboardView<'_> {
    fn render(self, area: Rect, buf: &mut Buffer) {
+      let header_height = if self.search_query.is_some() { 3 } else { 2 };
+
       let main_layout = Layout::default()
          .direction(Direction::Vertical)
          .constraints([
-            Constraint::Length(2), // Header
-            Constraint::Min(0),    // Main content
-            Constraint::Length(1), // Footer
+            Constraint::Length(header_height), // Header
+            Constraint::Min(0),                // Main content
+            Constraint::Length(1),             // Footer
          ])
          .split(area);
 
@@ -224,11 +295,9 @@ impl Widget for DashboardView<'_> {
 
       // Kanban board (left pane)
       KanbanBoard::new(self.issues, self.theme, self.config)
-         .selected_column(if self.selected_pane == 0 {
-            0
-         } else {
-            usize::MAX
-         })
+         .selected_column(self.selected_column)
+         .selected_item(self.selected_item)
+         .scroll_state(self.scroll_offset, self.column_scroll_state)
          .render(content_layout[0], buf);
 
       // Dependency graph (middle pane)

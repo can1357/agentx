@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use git2::Repository;
 use regex::Regex;
 
 use crate::issue::{Issue, IssueMetadata, IssueWithId};
@@ -54,6 +55,39 @@ impl Storage {
 
    fn aliases_file(&self) -> PathBuf {
       self.base_dir.join(ALIASES_FILE)
+   }
+
+   /// Stage file(s) in git if repository exists and issue storage is within repo
+   fn stage_in_git(&self, paths: &[&Path]) -> Result<()> {
+      let repo = match Repository::discover(&self.base_dir) {
+         Ok(repo) => repo,
+         Err(_) => return Ok(()), // No git repo, skip silently
+      };
+
+      let workdir = match repo.workdir() {
+         Some(wd) => wd,
+         None => return Ok(()), // Bare repo, skip
+      };
+
+      // Skip if issue storage is outside git repository
+      if self.base_dir.strip_prefix(workdir).is_err() {
+         return Ok(());
+      }
+
+      let mut index = repo.index()?;
+
+      for path in paths {
+         // Convert absolute path to relative path from repo workdir
+         let rel_path = path
+            .strip_prefix(workdir)
+            .with_context(|| format!("Path {:?} is not inside git workdir", path))?;
+
+         // Stage the file (handles both additions and deletions)
+         index.add_path(rel_path)?;
+      }
+
+      index.write()?;
+      Ok(())
    }
 
    /// Extract issue ID from filename (e.g., "01-fix-bug.mdx" -> 1)
@@ -225,6 +259,10 @@ impl Storage {
       let path = dir.join(filename);
 
       fs::write(&path, issue.to_mdx())?;
+
+      // Auto-stage the new/modified file in git
+      self.stage_in_git(&[&path])?;
+
       Ok(path)
    }
 
@@ -241,6 +279,9 @@ impl Storage {
       let issue = Issue { metadata, body };
       fs::write(&path, issue.to_mdx())?;
 
+      // Auto-stage the modified file in git
+      self.stage_in_git(&[&path])?;
+
       Ok(())
    }
 
@@ -252,7 +293,19 @@ impl Storage {
       let issue = Issue { metadata, body };
       let dest_path = self.save_issue(&issue, bug_num, to_open)?;
 
-      fs::remove_file(src_path)?;
+      fs::remove_file(&src_path)?;
+
+      // Stage the removal of old file in git
+      if let Ok(repo) = Repository::discover(&self.base_dir) {
+         let mut index = repo.index()?;
+         if let Some(workdir) = repo.workdir() {
+            if let Ok(rel_path) = src_path.strip_prefix(workdir) {
+               index.remove_path(rel_path)?;
+               index.write()?;
+            }
+         }
+      }
+
       Ok(dest_path)
    }
 

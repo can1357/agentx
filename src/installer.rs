@@ -231,6 +231,25 @@ fn get_client_configs() -> Vec<(&'static str, (PathBuf, &'static str))> {
       ("Claude Code", (home.clone(), ".claude.json")),
       ("LM Studio", (home.join(".lmstudio"), "mcp.json")),
       ("Codex", (home.join(".codex"), "config.toml")),
+      ("Zed", (PathBuf::from(&appdata).join("Zed"), "settings.json")),
+      ("Gemini CLI", (home.join(".gemini"), "settings.json")),
+      ("Qwen Coder", (home.join(".qwen"), "settings.json")),
+      ("Copilot CLI", (home.join(".copilot"), "mcp-config.json")),
+      ("Crush", (home.clone(), "crush.json")),
+      (
+         "Augment Code",
+         (PathBuf::from(&appdata).join("Code").join("User"), "settings.json"),
+      ),
+      (
+         "Qodo Gen",
+         (PathBuf::from(&appdata).join("Code").join("User"), "settings.json"),
+      ),
+      ("Antigravity IDE", (home.join(".gemini").join("antigravity"), "mcp_config.json")),
+      ("Warp", (home.join(".warp"), "mcp_config.json")),
+      ("Amazon Q", (home.join(".aws").join("amazonq"), "mcp_config.json")),
+      ("Opencode", (home.join(".opencode"), "mcp_config.json")),
+      ("Kiro", (home.join(".kiro"), "mcp_config.json")),
+      ("Trae", (home.join(".trae"), "mcp_config.json")),
    ]
 }
 
@@ -282,6 +301,21 @@ fn get_client_configs() -> Vec<(&'static str, (PathBuf, &'static str))> {
       ("Claude Code", (home.clone(), ".claude.json")),
       ("LM Studio", (home.join(".lmstudio"), "mcp.json")),
       ("Codex", (home.join(".codex"), "config.toml")),
+      ("Zed", (app_support.join("Zed"), "settings.json")),
+      ("Gemini CLI", (home.join(".gemini"), "settings.json")),
+      ("Qwen Coder", (home.join(".qwen"), "settings.json")),
+      ("Copilot CLI", (home.join(".copilot"), "mcp-config.json")),
+      ("Crush", (home.clone(), "crush.json")),
+      ("Augment Code", (app_support.join("Code").join("User"), "settings.json")),
+      ("Qodo Gen", (app_support.join("Code").join("User"), "settings.json")),
+      ("Antigravity IDE", (home.join(".gemini").join("antigravity"), "mcp_config.json")),
+      ("Warp", (home.join(".warp"), "mcp_config.json")),
+      ("Amazon Q", (home.join(".aws").join("amazonq"), "mcp_config.json")),
+      ("Opencode", (home.join(".opencode"), "mcp_config.json")),
+      ("Kiro", (home.join(".kiro"), "mcp_config.json")),
+      ("Trae", (home.join(".trae"), "mcp_config.json")),
+      ("BoltAI", (app_support.join("BoltAI"), "config.json")),
+      ("Perplexity", (app_support.join("Perplexity"), "mcp_config.json")),
    ]
 }
 
@@ -332,5 +366,18 @@ fn get_client_configs() -> Vec<(&'static str, (PathBuf, &'static str))> {
       ("Claude Code", (home.clone(), ".claude.json")),
       ("LM Studio", (home.join(".lmstudio"), "mcp.json")),
       ("Codex", (home.join(".codex"), "config.toml")),
+      ("Zed", (config_dir.join("zed"), "settings.json")),
+      ("Gemini CLI", (home.join(".gemini"), "settings.json")),
+      ("Qwen Coder", (home.join(".qwen"), "settings.json")),
+      ("Copilot CLI", (home.join(".copilot"), "mcp-config.json")),
+      ("Crush", (home.clone(), "crush.json")),
+      ("Augment Code", (config_dir.join("Code").join("User"), "settings.json")),
+      ("Qodo Gen", (config_dir.join("Code").join("User"), "settings.json")),
+      ("Antigravity IDE", (home.join(".gemini").join("antigravity"), "mcp_config.json")),
+      ("Warp", (home.join(".warp"), "mcp_config.json")),
+      ("Amazon Q", (home.join(".aws").join("amazonq"), "mcp_config.json")),
+      ("Opencode", (home.join(".opencode"), "mcp_config.json")),
+      ("Kiro", (home.join(".kiro"), "mcp_config.json")),
+      ("Trae", (home.join(".trae"), "mcp_config.json")),
    ]
 }

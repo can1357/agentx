@@ -236,14 +236,8 @@ fn get_client_configs() -> Vec<(&'static str, (PathBuf, &'static str))> {
       ("Qwen Coder", (home.join(".qwen"), "settings.json")),
       ("Copilot CLI", (home.join(".copilot"), "mcp-config.json")),
       ("Crush", (home.clone(), "crush.json")),
-      (
-         "Augment Code",
-         (PathBuf::from(&appdata).join("Code").join("User"), "settings.json"),
-      ),
-      (
-         "Qodo Gen",
-         (PathBuf::from(&appdata).join("Code").join("User"), "settings.json"),
-      ),
+      ("Augment Code", (PathBuf::from(&appdata).join("Code").join("User"), "settings.json")),
+      ("Qodo Gen", (PathBuf::from(&appdata).join("Code").join("User"), "settings.json")),
       ("Antigravity IDE", (home.join(".gemini").join("antigravity"), "mcp_config.json")),
       ("Warp", (home.join(".warp"), "mcp_config.json")),
       ("Amazon Q", (home.join(".aws").join("amazonq"), "mcp_config.json")),

@@ -57,7 +57,8 @@ impl Storage {
       self.base_dir.join(ALIASES_FILE)
    }
 
-   /// Stage file(s) in git if repository exists and issue storage is within repo
+   /// Stage file(s) in git if repository exists and issue storage is within
+   /// repo
    fn stage_in_git(&self, paths: &[&Path]) -> Result<()> {
       let repo = match Repository::discover(&self.base_dir) {
          Ok(repo) => repo,
@@ -299,10 +300,11 @@ impl Storage {
       if let Ok(repo) = Repository::discover(&self.base_dir) {
          let mut index = repo.index()?;
          if let Some(workdir) = repo.workdir()
-            && let Ok(rel_path) = src_path.strip_prefix(workdir) {
-               index.remove_path(rel_path)?;
-               index.write()?;
-            }
+            && let Ok(rel_path) = src_path.strip_prefix(workdir)
+         {
+            index.remove_path(rel_path)?;
+            index.write()?;
+         }
       }
 
       Ok(dest_path)

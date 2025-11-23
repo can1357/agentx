@@ -8,14 +8,14 @@ use anyhow::{Context, Result};
 use serde_json::json;
 
 const SAFE_TOOLS: &[&str] = &[
-   "issues/context",
-   "issues/create",
-   "issues/status",
-   "issues/show",
-   "issues/checkpoint",
-   "issues/wins",
-   "issues/search",
-   "issues/query",
+   "issues_context",
+   "issues_create",
+   "issues_status",
+   "issues_show",
+   "issues_checkpoint",
+   "issues_wins",
+   "issues_search",
+   "issues_query",
 ];
 
 /// Get the MCP server config for stdio transport

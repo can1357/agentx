@@ -12,13 +12,13 @@ Most Common Commands:
 8. `agentx activate <num>`       - Bring backlog task back
 
 MCP Tools (for AI agents):
-- issues/context   - Get current work context
-- issues/create    - Create new issue
-- issues/search    - Full-text search across all issues
-- issues/show      - Get full issue details
-- issues/checkpoint - Add progress notes
-- issues/query     - Advanced filtering
-- issues/wins      - Find quick-win tasks
+- issues_context   - Get current work context
+- issues_create    - Create new issue
+- issues_search    - Full-text search across all issues
+- issues_show      - Get full issue details
+- issues_checkpoint - Add progress notes
+- issues_query     - Advanced filtering
+- issues_wins      - Find quick-win tasks
 
 === DETAILED GUIDE ===
 
@@ -62,7 +62,7 @@ SEARCH/FILTER STRATEGY:
 - Use `focus` to see top priorities
 - Use `ready` to find actionable tasks
 - Use `blocked` to see what's waiting
-- Use MCP tool `issues/search` for full-text search across title/content
+- Use MCP tool `issues_search` for full-text search across title/content
 - Check both open AND closed for historical context
 
 INTEGRATION NOTES:

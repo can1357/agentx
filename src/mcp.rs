@@ -158,7 +158,7 @@ impl IssueTrackerMCP {
    }
 
    #[tool(
-      name = "issues/context",
+      name = "issues_context",
       description = "Get current work context - in-progress, blocked, priority tasks, and backlog \
                      count"
    )]
@@ -219,7 +219,7 @@ impl IssueTrackerMCP {
       )]))
    }
 
-   #[tool(name = "issues/create", description = "Create a new issue/task")]
+   #[tool(name = "issues_create", description = "Create a new issue/task")]
    async fn create(
       &self,
       Parameters(request): Parameters<CreateIssueRequest>,
@@ -264,7 +264,7 @@ impl IssueTrackerMCP {
    }
 
    #[tool(
-      name = "issues/status",
+      name = "issues_status",
       description = "Update issue status (start, block, done, close, reopen, defer, activate)"
    )]
    async fn status(
@@ -318,7 +318,7 @@ impl IssueTrackerMCP {
          })
    }
 
-   #[tool(name = "issues/show", description = "Show full issue details")]
+   #[tool(name = "issues_show", description = "Show full issue details")]
    async fn show(
       &self,
       Parameters(request): Parameters<ShowRequest>,
@@ -341,7 +341,7 @@ impl IssueTrackerMCP {
       Ok(CallToolResult::success(vec![Content::text(issue.to_mdx())]))
    }
 
-   #[tool(name = "issues/checkpoint", description = "Add checkpoint/progress note to an issue")]
+   #[tool(name = "issues_checkpoint", description = "Add checkpoint/progress note to an issue")]
    async fn checkpoint(
       &self,
       Parameters(request): Parameters<CheckpointRequest>,
@@ -376,7 +376,7 @@ impl IssueTrackerMCP {
       )]))
    }
 
-   #[tool(name = "issues/wins", description = "Find quick-win tasks under effort threshold")]
+   #[tool(name = "issues_wins", description = "Find quick-win tasks under effort threshold")]
    async fn wins(
       &self,
       Parameters(request): Parameters<QuickWinsRequest>,
@@ -432,7 +432,7 @@ impl IssueTrackerMCP {
    }
 
    #[tool(
-      name = "issues/search",
+      name = "issues_search",
       description = "Full-text search across all issues (title, content, metadata)"
    )]
    async fn search(
@@ -541,7 +541,7 @@ impl IssueTrackerMCP {
    }
 
    #[tool(
-      name = "issues/query",
+      name = "issues_query",
       description = "Query issues with filters (status, priority, effort, files)"
    )]
    async fn query(
@@ -666,10 +666,10 @@ impl ServerHandler for IssueTrackerMCP {
          },
          instructions:     Some(
             "Issue tracker MCP server providing tools for managing tasks and bugs. Use \
-             issues/context to see current work, issues/create to add tasks, issues/status to \
-             update status (start, block, close, defer, activate), issues/checkpoint for progress \
-             notes, issues/search for full-text search, issues/query for advanced filtering, and \
-             issues/wins to find quick-win tasks. Defer non-urgent tasks to backlog with 'defer' \
+             issues_context to see current work, issues_create to add tasks, issues_status to \
+             update status (start, block, close, defer, activate), issues_checkpoint for progress \
+             notes, issues_search for full-text search, issues_query for advanced filtering, and \
+             issues_wins to find quick-win tasks. Defer non-urgent tasks to backlog with 'defer' \
              status."
                .to_string(),
          ),

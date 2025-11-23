@@ -638,13 +638,18 @@ impl ElicitationSchema {
         let generator = settings.into_generator();
         let schema = generator.into_root_schema_for::<T>();
         let object = serde_json::to_value(schema).expect("failed to serialize schema");
-        match object {
-            serde_json::Value::Object(object) => Self::from_json_schema(object),
+        let mut obj = match object {
+            serde_json::Value::Object(object) => object,
             _ => panic!(
                 "Schema serialization produced non-object value: expected JSON object but got {:?}",
                 object
             ),
-        }
+        };
+
+        // Transform schema to be Gemini API compatible
+        crate::handler::server::common::transform_for_gemini_elicitation(&mut obj);
+
+        Self::from_json_schema(obj)
     }
 
     /// Set the required fields

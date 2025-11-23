@@ -17,12 +17,96 @@ pub fn schema_for_type<T: JsonSchema>() -> JsonObject {
     let generator = settings.into_generator();
     let schema = generator.into_root_schema_for::<T>();
     let object = serde_json::to_value(schema).expect("failed to serialize schema");
-    match object {
+    let mut obj = match object {
         serde_json::Value::Object(object) => object,
         _ => panic!(
             "Schema serialization produced non-object value: expected JSON object but got {:?}",
             object
         ),
+    };
+
+    // Transform schema to be Gemini API compatible
+    transform_for_gemini(&mut obj);
+    obj
+}
+
+/// Transform JSON Schema to be compatible with Gemini's function calling API.
+pub(crate) fn transform_for_gemini_elicitation(obj: &mut serde_json::Map<String, serde_json::Value>) {
+    transform_for_gemini(obj);
+}
+
+fn transform_for_gemini(obj: &mut serde_json::Map<String, serde_json::Value>) {
+    use serde_json::Value;
+
+    // Remove Gemini-unsupported fields
+    obj.remove("nullable");
+    obj.remove("$schema");
+    obj.remove("title");
+
+    // Transform type arrays to single type
+    if let Some(Value::Array(type_array)) = obj.get("type") {
+        if let Some(non_null_type) = type_array
+            .iter()
+            .find(|t| t.as_str() != Some("null"))
+            .cloned()
+        {
+            obj.insert("type".to_string(), non_null_type);
+        }
+    }
+
+    // Transform allOf with single element (flatten it)
+    if let Some(Value::Array(all_of)) = obj.get("allOf").cloned() {
+        if all_of.len() == 1 {
+            if let Value::Object(single_opt) = &all_of[0] {
+                obj.remove("allOf");
+                for (key, value) in single_opt {
+                    if key != "description" || !obj.contains_key("description") {
+                        obj.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    // Transform anyOf patterns where one option is null
+    if let Some(Value::Array(any_of)) = obj.get("anyOf").cloned() {
+        let non_null_options: Vec<_> = any_of
+            .iter()
+            .filter(|opt| {
+                !matches!(opt, Value::Object(o) if o.get("type") == Some(&Value::String("null".to_string())))
+            })
+            .cloned()
+            .collect();
+
+        if non_null_options.len() == 1 {
+            if let Value::Object(single_opt) = &non_null_options[0] {
+                obj.remove("anyOf");
+                for (key, value) in single_opt {
+                    if key != "description" || !obj.contains_key("description") {
+                        obj.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+        } else if !non_null_options.is_empty() {
+            obj.insert("anyOf".to_string(), Value::Array(non_null_options));
+        }
+    }
+
+    // Recursively transform nested objects
+    for value in obj.values_mut() {
+        transform_value_for_gemini(value);
+    }
+}
+
+fn transform_value_for_gemini(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(obj) => transform_for_gemini(obj),
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                transform_value_for_gemini(item);
+            }
+        },
+        _ => {},
     }
 }
 

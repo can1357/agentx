@@ -2,6 +2,7 @@ pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod fuzzy;
+pub mod gemini_schema;
 pub mod git;
 pub mod guide;
 pub mod installer;

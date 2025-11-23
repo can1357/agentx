@@ -1,7 +1,6 @@
 use std::fmt;
 
 use chrono::{DateTime, Utc};
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
@@ -55,7 +54,7 @@ mod datetime_rfc3339_option {
    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Status {
    #[serde(rename = "open")]
@@ -95,7 +94,7 @@ impl Status {
 }
 
 #[derive(
-   Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+   Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
 #[serde(rename_all = "lowercase")]
 pub enum Priority {

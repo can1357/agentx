@@ -4,7 +4,6 @@ use agentx::{
    config::Config,
    guide,
    interactive::wizards,
-   mcp::IssueTrackerMCP,
    storage::Storage,
 };
 use anyhow::Result;
@@ -234,7 +233,7 @@ async fn main() -> Result<()> {
          }
       },
       Command::Serve => {
-         IssueTrackerMCP::serve_stdio().await?;
+         agentx::mcp_simple::SimpleMcpServer::serve_stdio().await?;
       },
       Command::Defer { bug_ref } => {
          commands.defer(&bug_ref, cli.json)?;

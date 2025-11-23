@@ -1,6 +1,0 @@
-[workspace]
-members = [
-    "schemars",
-    "schemars_derive"
-]
-resolver = "2"

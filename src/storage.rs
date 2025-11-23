@@ -298,12 +298,11 @@ impl Storage {
       // Stage the removal of old file in git
       if let Ok(repo) = Repository::discover(&self.base_dir) {
          let mut index = repo.index()?;
-         if let Some(workdir) = repo.workdir() {
-            if let Ok(rel_path) = src_path.strip_prefix(workdir) {
+         if let Some(workdir) = repo.workdir()
+            && let Ok(rel_path) = src_path.strip_prefix(workdir) {
                index.remove_path(rel_path)?;
                index.write()?;
             }
-         }
       }
 
       Ok(dest_path)

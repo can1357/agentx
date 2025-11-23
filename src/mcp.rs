@@ -129,6 +129,97 @@ pub struct QueryRequest {
    pub tags:          Option<Vec<String>>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListRequest {
+   #[schemars(description = "Status filter: 'open' or 'closed'. Default: 'open'")]
+   pub status: Option<String>,
+   #[schemars(description = "Include verbose output with file information")]
+   pub verbose: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ImportRequest {
+   #[schemars(description = "YAML content to import (array of issue definitions)")]
+   pub yaml_content: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AliasListRequest {}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AliasAddRequest {
+   #[schemars(description = "Bug reference (number or alias)")]
+   pub bug_ref: String,
+   #[schemars(description = "New alias name")]
+   pub alias: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AliasRemoveRequest {
+   #[schemars(description = "Alias to remove")]
+   pub alias: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BulkStartRequest {
+   #[schemars(description = "Bug references to start (numbers or aliases)")]
+   pub bug_refs: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BulkCloseRequest {
+   #[schemars(description = "Bug references to close (numbers or aliases)")]
+   pub bug_refs: Vec<String>,
+   #[schemars(description = "Optional close message")]
+   pub message: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SummaryRequest {
+   #[schemars(description = "Hours to look back (default: 24)")]
+   pub hours: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DependenciesRequest {
+   #[schemars(description = "Bug reference (number or alias)")]
+   pub bug_ref: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DependRequest {
+   #[schemars(description = "Bug reference (number or alias)")]
+   pub bug_ref: String,
+   #[schemars(description = "Dependencies to add")]
+   pub add: Option<Vec<String>>,
+   #[schemars(description = "Dependencies to remove")]
+   pub remove: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TagRequest {
+   #[schemars(description = "Bug reference (number or alias)")]
+   pub bug_ref: String,
+   #[schemars(description = "Tags to add")]
+   pub add: Option<Vec<String>>,
+   #[schemars(description = "Tags to remove")]
+   pub remove: Option<Vec<String>>,
+   #[schemars(description = "List tags only")]
+   pub list: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MetricsRequest {
+   #[schemars(description = "Time period: 'day', 'week', 'month', 'all'. Default: 'week'")]
+   pub period: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DepsGraphRequest {
+   #[schemars(description = "Show only this issue and its dependencies")]
+   pub issue: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct IssueTrackerMCP {
    commands:    Arc<Commands>,
@@ -644,6 +735,1098 @@ impl IssueTrackerMCP {
 
       Ok(CallToolResult::success(vec![Content::text(
          serde_json::to_string_pretty(&result).unwrap(),
+      )]))
+   }
+
+   #[tool(name = "issues_list", description = "List issues with status filter and verbose option")]
+   async fn list(
+      &self,
+      Parameters(request): Parameters<ListRequest>,
+   ) -> Result<CallToolResult, McpError> {
+      let status = request.status.as_deref().unwrap_or("open");
+      let verbose = request.verbose.unwrap_or(false);
+
+      let issues = match status {
+         "open" => self.storage.list_open_issues(),
+         "closed" => self.storage.list_closed_issues(),
+         _ => {
+            return Err(McpError {
+               code:    ErrorCode(-32602),
+               message: Cow::from("Invalid status: must be 'open' or 'closed'"),
+               data:    None,
+            })
+         },
+      }
+      .map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to list issues: {}", e)),
+         data:    None,
+      })?;
+
+      let data: Vec<_> = issues
+         .iter()
+         .map(|issue_with_id| {
+            let mut obj = serde_json::json!({
+                "num": issue_with_id.id,
+                "title": issue_with_id.issue.metadata.title,
+                "priority": issue_with_id.issue.metadata.priority.to_string(),
+                "status": issue_with_id.issue.metadata.status.to_string(),
+                "tags": issue_with_id.issue.metadata.tags,
+            });
+
+            if verbose {
+               obj["files"] = serde_json::json!(issue_with_id.issue.metadata.files);
+               obj["effort"] = serde_json::json!(issue_with_id.issue.metadata.effort);
+               obj["blocked_reason"] = serde_json::json!(issue_with_id.issue.metadata.blocked_reason);
+            }
+
+            obj
+         })
+         .collect();
+
+      Ok(CallToolResult::success(vec![Content::text(
+         serde_json::to_string_pretty(&data).unwrap(),
+      )]))
+   }
+
+   #[tool(name = "issues_focus", description = "Show top priority tasks")]
+   async fn focus(
+      &self,
+      Parameters(_request): Parameters<ContextRequest>,
+   ) -> Result<CallToolResult, McpError> {
+      let issues = self.storage.list_open_issues().map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to list issues: {}", e)),
+         data:    None,
+      })?;
+
+      let mut focus_issues: Vec<_> = issues
+         .iter()
+         .map(|issue_with_id| {
+            let sort_key = match issue_with_id.issue.metadata.status {
+               Status::InProgress | Status::Blocked => -1,
+               _ => issue_with_id.issue.metadata.priority.sort_key() as i32,
+            };
+            (issue_with_id, sort_key)
+         })
+         .collect();
+
+      focus_issues.sort_by_key(|(_, key)| *key);
+      let focus_issues: Vec<_> = focus_issues
+         .iter()
+         .take(5)
+         .map(|(issue_with_id, _)| {
+            serde_json::json!({
+                "num": issue_with_id.id,
+                "title": issue_with_id.issue.metadata.title,
+                "priority": issue_with_id.issue.metadata.priority.to_string(),
+                "status": issue_with_id.issue.metadata.status.to_string(),
+            })
+         })
+         .collect();
+
+      Ok(CallToolResult::success(vec![Content::text(
+         serde_json::to_string_pretty(&focus_issues).unwrap(),
+      )]))
+   }
+
+   #[tool(name = "issues_blocked", description = "Show blocked tasks")]
+   async fn blocked(
+      &self,
+      Parameters(_request): Parameters<ContextRequest>,
+   ) -> Result<CallToolResult, McpError> {
+      let issues = self.storage.list_open_issues().map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to list issues: {}", e)),
+         data:    None,
+      })?;
+
+      let blocked_issues: Vec<_> = issues
+         .iter()
+         .filter(|issue_with_id| issue_with_id.issue.metadata.status == Status::Blocked)
+         .map(|issue_with_id| {
+            serde_json::json!({
+                "num": issue_with_id.id,
+                "title": issue_with_id.issue.metadata.title,
+                "reason": issue_with_id.issue.metadata.blocked_reason,
+                "priority": issue_with_id.issue.metadata.priority.to_string(),
+            })
+         })
+         .collect();
+
+      let result = serde_json::json!({
+          "blocked": blocked_issues,
+          "count": blocked_issues.len(),
+      });
+
+      Ok(CallToolResult::success(vec![Content::text(
+         serde_json::to_string_pretty(&result).unwrap(),
+      )]))
+   }
+
+   #[tool(name = "issues_ready", description = "Show tasks ready to start")]
+   async fn ready(
+      &self,
+      Parameters(_request): Parameters<ContextRequest>,
+   ) -> Result<CallToolResult, McpError> {
+      let issues = self.storage.list_open_issues().map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to list issues: {}", e)),
+         data:    None,
+      })?;
+
+      let mut ready_issues: Vec<_> = issues
+         .iter()
+         .filter(|issue_with_id| issue_with_id.issue.metadata.status == Status::NotStarted)
+         .collect();
+
+      ready_issues.sort_by_key(|issue_with_id| issue_with_id.issue.metadata.priority.sort_key());
+
+      let data: Vec<_> = ready_issues
+         .iter()
+         .map(|issue_with_id| {
+            serde_json::json!({
+                "num": issue_with_id.id,
+                "title": issue_with_id.issue.metadata.title,
+                "priority": issue_with_id.issue.metadata.priority.to_string(),
+                "files": issue_with_id.issue.metadata.files,
+            })
+         })
+         .collect();
+
+      let result = serde_json::json!({
+          "ready": data,
+          "count": data.len(),
+      });
+
+      Ok(CallToolResult::success(vec![Content::text(
+         serde_json::to_string_pretty(&result).unwrap(),
+      )]))
+   }
+
+   #[tool(name = "issues_import", description = "Import multiple issues from YAML")]
+   async fn import(
+      &self,
+      Parameters(request): Parameters<ImportRequest>,
+   ) -> Result<CallToolResult, McpError> {
+      let data: Vec<serde_yaml::Value> =
+         serde_yaml::from_str(&request.yaml_content).map_err(|e| McpError {
+            code:    ErrorCode(-32602),
+            message: Cow::from(format!("Failed to parse YAML: {}", e)),
+            data:    None,
+         })?;
+
+      let mut created = Vec::new();
+
+      for item in data {
+         let obj = item.as_mapping().ok_or_else(|| McpError {
+            code:    ErrorCode(-32602),
+            message: Cow::from("Item must be a mapping"),
+            data:    None,
+         })?;
+
+         let title = obj
+            .get("title")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| McpError {
+               code:    ErrorCode(-32602),
+               message: Cow::from("Missing title"),
+               data:    None,
+            })?
+            .to_string();
+
+         let priority_str = obj
+            .get("priority")
+            .and_then(|v| v.as_str())
+            .unwrap_or("medium");
+
+         let tags: Vec<String> = obj
+            .get("tags")
+            .and_then(|v| v.as_sequence())
+            .map(|seq| {
+               seq.iter()
+                  .filter_map(|v| v.as_str().map(String::from))
+                  .collect()
+            })
+            .unwrap_or_default();
+
+         let files: Vec<String> = obj
+            .get("files")
+            .and_then(|v| v.as_sequence())
+            .map(|seq| {
+               seq.iter()
+                  .filter_map(|v| v.as_str().map(String::from))
+                  .collect()
+            })
+            .unwrap_or_default();
+
+         let issue = obj
+            .get("issue")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+         let impact = obj
+            .get("impact")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+         let acceptance = obj
+            .get("acceptance")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+         let effort = obj.get("effort").and_then(|v| v.as_str()).map(String::from);
+
+         let context = obj
+            .get("context")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+         self
+            .commands
+            .create_issue(
+               title,
+               priority_str,
+               tags,
+               files,
+               issue,
+               impact,
+               acceptance,
+               effort,
+               context,
+               true,
+            )
+            .map_err(|e| McpError {
+               code:    ErrorCode(-32603),
+               message: Cow::from(format!("Failed to create issue: {}", e)),
+               data:    None,
+            })?;
+
+         let bug_num = self.storage.next_bug_number().map_err(|e| McpError {
+            code:    ErrorCode(-32603),
+            message: Cow::from(format!("Failed to get bug number: {}", e)),
+            data:    None,
+         })? - 1;
+
+         created.push(bug_num);
+      }
+
+      let result = serde_json::json!({
+          "created": created,
+          "count": created.len(),
+      });
+
+      Ok(CallToolResult::success(vec![Content::text(
+         serde_json::to_string_pretty(&result).unwrap(),
+      )]))
+   }
+
+   #[tool(name = "issues_alias_list", description = "List all aliases")]
+   async fn alias_list(
+      &self,
+      Parameters(_request): Parameters<AliasListRequest>,
+   ) -> Result<CallToolResult, McpError> {
+      let aliases = self.storage.load_aliases().map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to load aliases: {}", e)),
+         data:    None,
+      })?;
+
+      Ok(CallToolResult::success(vec![Content::text(
+         serde_json::to_string_pretty(&aliases).unwrap(),
+      )]))
+   }
+
+   #[tool(name = "issues_alias_add", description = "Add an alias for an issue")]
+   async fn alias_add(
+      &self,
+      Parameters(request): Parameters<AliasAddRequest>,
+   ) -> Result<CallToolResult, McpError> {
+      let bug_num = self
+         .storage
+         .resolve_bug_ref(&request.bug_ref)
+         .map_err(|e| McpError {
+            code:    ErrorCode(-32602),
+            message: Cow::from(format!("Invalid bug ref: {}", e)),
+            data:    None,
+         })?;
+
+      self.storage.find_issue_file(bug_num).map_err(|e| McpError {
+         code:    ErrorCode(-32602),
+         message: Cow::from(format!("Issue not found: {}", e)),
+         data:    None,
+      })?;
+
+      let mut aliases = self.storage.load_aliases().map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to load aliases: {}", e)),
+         data:    None,
+      })?;
+
+      aliases.insert(request.alias.clone(), bug_num);
+      self.storage.save_aliases(&aliases).map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to save aliases: {}", e)),
+         data:    None,
+      })?;
+
+      let result = serde_json::json!({
+          "alias": request.alias,
+          "bug_num": bug_num,
+      });
+
+      Ok(CallToolResult::success(vec![Content::text(
+         serde_json::to_string_pretty(&result).unwrap(),
+      )]))
+   }
+
+   #[tool(name = "issues_alias_remove", description = "Remove an alias")]
+   async fn alias_remove(
+      &self,
+      Parameters(request): Parameters<AliasRemoveRequest>,
+   ) -> Result<CallToolResult, McpError> {
+      let mut aliases = self.storage.load_aliases().map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to load aliases: {}", e)),
+         data:    None,
+      })?;
+
+      let bug_num = aliases.remove(&request.alias).ok_or_else(|| McpError {
+         code:    ErrorCode(-32602),
+         message: Cow::from(format!("Alias '{}' not found", request.alias)),
+         data:    None,
+      })?;
+
+      self.storage.save_aliases(&aliases).map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to save aliases: {}", e)),
+         data:    None,
+      })?;
+
+      let result = serde_json::json!({
+          "removed": request.alias,
+          "was": bug_num,
+      });
+
+      Ok(CallToolResult::success(vec![Content::text(
+         serde_json::to_string_pretty(&result).unwrap(),
+      )]))
+   }
+
+   #[tool(name = "issues_bulk_start", description = "Start multiple issues at once")]
+   async fn bulk_start(
+      &self,
+      Parameters(request): Parameters<BulkStartRequest>,
+   ) -> Result<CallToolResult, McpError> {
+      use chrono::Utc;
+
+      let mut results = Vec::new();
+      let mut errors = Vec::new();
+
+      for bug_ref in request.bug_refs {
+         match self.storage.resolve_bug_ref(&bug_ref) {
+            Ok(bug_num) => {
+               if let Err(e) = self.storage.update_issue_metadata(bug_num, |meta| {
+                  meta.status = Status::InProgress;
+                  meta.started = Some(Utc::now());
+               }) {
+                  errors.push(serde_json::json!({
+                      "bug_ref": bug_ref,
+                      "error": e.to_string(),
+                  }));
+               } else {
+                  results.push(bug_num);
+               }
+            },
+            Err(e) => {
+               errors.push(serde_json::json!({
+                   "bug_ref": bug_ref,
+                   "error": e.to_string(),
+               }));
+            },
+         }
+      }
+
+      let output = serde_json::json!({
+          "started": results,
+          "errors": errors,
+      });
+
+      Ok(CallToolResult::success(vec![Content::text(
+         serde_json::to_string_pretty(&output).unwrap(),
+      )]))
+   }
+
+   #[tool(name = "issues_bulk_close", description = "Close multiple issues at once")]
+   async fn bulk_close(
+      &self,
+      Parameters(request): Parameters<BulkCloseRequest>,
+   ) -> Result<CallToolResult, McpError> {
+      use chrono::Utc;
+
+      let mut results = Vec::new();
+      let mut errors = Vec::new();
+
+      for bug_ref in request.bug_refs {
+         match self.storage.resolve_bug_ref(&bug_ref) {
+            Ok(bug_num) => {
+               if let Err(e) = self.storage.update_issue_metadata(bug_num, |meta| {
+                  meta.status = Status::Closed;
+                  meta.closed = Some(Utc::now());
+               }) {
+                  errors.push(serde_json::json!({
+                      "bug_ref": bug_ref.clone(),
+                      "error": e.to_string(),
+                  }));
+                  continue;
+               }
+
+               if let Some(ref note) = request.message
+                  && let Ok(mut issue) = self.storage.load_issue(bug_num) {
+                     let timestamp = Utc::now().format("%Y-%m-%d").to_string();
+                     issue
+                        .body
+                        .push_str(&format!("\n\n---\n\n**Closed** ({timestamp}): {note}\n"));
+                     if let Err(e) = self.storage.save_issue(&issue, bug_num, true) {
+                        errors.push(serde_json::json!({
+                            "bug_ref": bug_ref.clone(),
+                            "error": e.to_string(),
+                        }));
+                        continue;
+                     }
+                  }
+
+               if let Err(e) = self.storage.move_issue(bug_num, false) {
+                  errors.push(serde_json::json!({
+                      "bug_ref": bug_ref,
+                      "error": e.to_string(),
+                  }));
+               } else {
+                  results.push(bug_num);
+               }
+            },
+            Err(e) => {
+               errors.push(serde_json::json!({
+                   "bug_ref": bug_ref,
+                   "error": e.to_string(),
+               }));
+            },
+         }
+      }
+
+      let output = serde_json::json!({
+          "closed": results,
+          "errors": errors,
+      });
+
+      Ok(CallToolResult::success(vec![Content::text(
+         serde_json::to_string_pretty(&output).unwrap(),
+      )]))
+   }
+
+   #[tool(name = "issues_summary", description = "Show session summary (recent activity)")]
+   async fn summary(
+      &self,
+      Parameters(request): Parameters<SummaryRequest>,
+   ) -> Result<CallToolResult, McpError> {
+      use chrono::{Duration, Utc};
+
+      let hours = request.hours.unwrap_or(24);
+      let since = Utc::now() - Duration::hours(hours as i64);
+
+      let all_issues = self.storage.list_open_issues().map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to list issues: {}", e)),
+         data:    None,
+      })?;
+
+      let closed_issues = self.storage.list_closed_issues().map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to list closed issues: {}", e)),
+         data:    None,
+      })?;
+
+      let started: Vec<_> = all_issues
+         .iter()
+         .filter(|i| {
+            if let Some(started_time) = i.issue.metadata.started {
+               started_time > since
+            } else {
+               false
+            }
+         })
+         .map(|i| i.id)
+         .collect();
+
+      let closed: Vec<_> = closed_issues
+         .iter()
+         .filter(|i| {
+            if let Some(closed_time) = i.issue.metadata.closed {
+               closed_time > since
+            } else {
+               false
+            }
+         })
+         .map(|i| i.id)
+         .collect();
+
+      let checkpointed: Vec<_> = all_issues
+         .iter()
+         .filter(|i| i.issue.body.contains("**Checkpoint**"))
+         .map(|i| i.id)
+         .collect();
+
+      let output = serde_json::json!({
+          "since": since.to_rfc3339(),
+          "hours": hours,
+          "started": started,
+          "closed": closed,
+          "checkpointed": checkpointed,
+      });
+
+      Ok(CallToolResult::success(vec![Content::text(
+         serde_json::to_string_pretty(&output).unwrap(),
+      )]))
+   }
+
+   #[tool(name = "issues_dependencies", description = "Show issue dependencies")]
+   async fn dependencies(
+      &self,
+      Parameters(request): Parameters<DependenciesRequest>,
+   ) -> Result<CallToolResult, McpError> {
+      let bug_num = self
+         .storage
+         .resolve_bug_ref(&request.bug_ref)
+         .map_err(|e| McpError {
+            code:    ErrorCode(-32602),
+            message: Cow::from(format!("Invalid bug ref: {}", e)),
+            data:    None,
+         })?;
+
+      let issue = self.storage.load_issue(bug_num).map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to load issue: {}", e)),
+         data:    None,
+      })?;
+
+      let depends_on: Vec<_> = issue
+         .metadata
+         .depends_on
+         .iter()
+         .filter_map(|&dep_num| {
+            self
+               .storage
+               .load_issue(dep_num)
+               .ok()
+               .map(|dep_issue| {
+                  serde_json::json!({
+                      "num": dep_num,
+                      "title": dep_issue.metadata.title,
+                      "status": dep_issue.metadata.status.to_string(),
+                  })
+               })
+         })
+         .collect();
+
+      let all_issues = self.storage.list_open_issues().map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to list issues: {}", e)),
+         data:    None,
+      })?;
+
+      let blocks: Vec<_> = all_issues
+         .iter()
+         .filter(|i| i.issue.metadata.depends_on.contains(&bug_num))
+         .map(|i| {
+            serde_json::json!({
+                "num": i.id,
+                "title": i.issue.metadata.title,
+                "status": i.issue.metadata.status.to_string(),
+            })
+         })
+         .collect();
+
+      let output = serde_json::json!({
+          "issue": {
+              "num": bug_num,
+              "title": issue.metadata.title,
+          },
+          "depends_on": depends_on,
+          "blocks": blocks,
+      });
+
+      Ok(CallToolResult::success(vec![Content::text(
+         serde_json::to_string_pretty(&output).unwrap(),
+      )]))
+   }
+
+   #[tool(name = "issues_depend", description = "Manage issue dependencies")]
+   async fn depend(
+      &self,
+      Parameters(request): Parameters<DependRequest>,
+   ) -> Result<CallToolResult, McpError> {
+      
+
+      let bug_num = self
+         .storage
+         .resolve_bug_ref(&request.bug_ref)
+         .map_err(|e| McpError {
+            code:    ErrorCode(-32602),
+            message: Cow::from(format!("Invalid bug ref: {}", e)),
+            data:    None,
+         })?;
+
+      let add_deps = request.add.unwrap_or_default();
+      let remove_deps = request.remove.unwrap_or_default();
+
+      let mut add_nums = Vec::new();
+      for dep_ref in &add_deps {
+         let dep_num = self
+            .storage
+            .resolve_bug_ref(dep_ref)
+            .map_err(|e| McpError {
+               code:    ErrorCode(-32602),
+               message: Cow::from(format!("Invalid dependency ref: {}", e)),
+               data:    None,
+            })?;
+         self.storage.load_issue(dep_num).map_err(|e| McpError {
+            code:    ErrorCode(-32602),
+            message: Cow::from(format!("Dependency issue not found: {}", e)),
+            data:    None,
+         })?;
+         add_nums.push(dep_num);
+      }
+
+      let mut remove_nums = Vec::new();
+      for dep_ref in &remove_deps {
+         let dep_num = self
+            .storage
+            .resolve_bug_ref(dep_ref)
+            .map_err(|e| McpError {
+               code:    ErrorCode(-32602),
+               message: Cow::from(format!("Invalid dependency ref: {}", e)),
+               data:    None,
+            })?;
+         remove_nums.push(dep_num);
+      }
+
+      self
+         .storage
+         .update_issue_metadata(bug_num, |meta| {
+            for dep_num in add_nums.iter() {
+               if !meta.depends_on.contains(dep_num) {
+                  meta.depends_on.push(*dep_num);
+               }
+            }
+            meta.depends_on.retain(|&d| !remove_nums.contains(&d));
+            meta.depends_on.sort_unstable();
+         })
+         .map_err(|e| McpError {
+            code:    ErrorCode(-32603),
+            message: Cow::from(format!("Failed to update dependencies: {}", e)),
+            data:    None,
+         })?;
+
+      for &dep_num in &add_nums {
+         self
+            .storage
+            .update_issue_metadata(dep_num, |meta| {
+               if !meta.blocks.contains(&bug_num) {
+                  meta.blocks.push(bug_num);
+               }
+               meta.blocks.sort_unstable();
+            })
+            .map_err(|e| McpError {
+               code:    ErrorCode(-32603),
+               message: Cow::from(format!("Failed to update reverse dependencies: {}", e)),
+               data:    None,
+            })?;
+      }
+
+      for &dep_num in &remove_nums {
+         self
+            .storage
+            .update_issue_metadata(dep_num, |meta| {
+               meta.blocks.retain(|&b| b != bug_num);
+            })
+            .map_err(|e| McpError {
+               code:    ErrorCode(-32603),
+               message: Cow::from(format!("Failed to update reverse dependencies: {}", e)),
+               data:    None,
+            })?;
+      }
+
+      let issue = self.storage.load_issue(bug_num).map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to load issue: {}", e)),
+         data:    None,
+      })?;
+
+      let output = serde_json::json!({
+          "bug_num": bug_num,
+          "added": add_nums,
+          "removed": remove_nums,
+          "depends_on": issue.metadata.depends_on,
+      });
+
+      Ok(CallToolResult::success(vec![Content::text(
+         serde_json::to_string_pretty(&output).unwrap(),
+      )]))
+   }
+
+   #[tool(name = "issues_tag", description = "Manage issue tags")]
+   async fn tag(
+      &self,
+      Parameters(request): Parameters<TagRequest>,
+   ) -> Result<CallToolResult, McpError> {
+      use smol_str::SmolStr;
+
+      let bug_num = self
+         .storage
+         .resolve_bug_ref(&request.bug_ref)
+         .map_err(|e| McpError {
+            code:    ErrorCode(-32602),
+            message: Cow::from(format!("Invalid bug ref: {}", e)),
+            data:    None,
+         })?;
+
+      let issue = self.storage.load_issue(bug_num).map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to load issue: {}", e)),
+         data:    None,
+      })?;
+
+      if request.list.unwrap_or(false) {
+         let output = serde_json::json!({
+             "bug_num": bug_num,
+             "tags": issue.metadata.tags,
+         });
+         return Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&output).unwrap(),
+         )]));
+      }
+
+      let add_tags = request.add.unwrap_or_default();
+      let remove_tags = request.remove.unwrap_or_default();
+
+      if add_tags.is_empty() && remove_tags.is_empty() {
+         return Err(McpError {
+            code:    ErrorCode(-32602),
+            message: Cow::from("Specify add or remove tags, or use list=true"),
+            data:    None,
+         });
+      }
+
+      let normalize_tag = |t: &str| -> String { t.trim().trim_start_matches('#').to_lowercase() };
+
+      let add_tags: Vec<String> = add_tags.iter().map(|t| normalize_tag(t)).collect();
+      let remove_tags: Vec<String> = remove_tags.iter().map(|t| normalize_tag(t)).collect();
+
+      self
+         .storage
+         .update_issue_metadata(bug_num, |meta| {
+            for tag in &add_tags {
+               let tag_smol = SmolStr::from(tag.as_str());
+               if !meta.tags.contains(&tag_smol) {
+                  meta.tags.push(tag_smol);
+               }
+            }
+
+            let remove_smol: Vec<SmolStr> = remove_tags
+               .iter()
+               .map(|s| SmolStr::from(s.as_str()))
+               .collect();
+            meta.tags.retain(|t| !remove_smol.contains(t));
+            meta.tags.sort();
+         })
+         .map_err(|e| McpError {
+            code:    ErrorCode(-32603),
+            message: Cow::from(format!("Failed to update tags: {}", e)),
+            data:    None,
+         })?;
+
+      let updated_issue = self.storage.load_issue(bug_num).map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to load updated issue: {}", e)),
+         data:    None,
+      })?;
+
+      let output = serde_json::json!({
+          "bug_num": bug_num,
+          "added": add_tags,
+          "removed": remove_tags,
+          "tags": updated_issue.metadata.tags,
+      });
+
+      Ok(CallToolResult::success(vec![Content::text(
+         serde_json::to_string_pretty(&output).unwrap(),
+      )]))
+   }
+
+   #[tool(name = "issues_critical_path", description = "Find longest dependency chain")]
+   async fn critical_path(
+      &self,
+      Parameters(_request): Parameters<ContextRequest>,
+   ) -> Result<CallToolResult, McpError> {
+      let issues = self.storage.list_open_issues().map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to list issues: {}", e)),
+         data:    None,
+      })?;
+
+      let issue_map: std::collections::HashMap<u32, &crate::issue::IssueWithId> =
+         issues.iter().map(|i| (i.id, i)).collect();
+
+      let mut longest_chain = Vec::new();
+      let mut visited = std::collections::HashSet::new();
+
+      fn find_chain(
+         issue_id: u32,
+         issues: &[crate::issue::IssueWithId],
+         visited: &mut std::collections::HashSet<u32>,
+         current_chain: &mut Vec<u32>,
+         longest: &mut Vec<u32>,
+      ) {
+         if visited.contains(&issue_id) {
+            return;
+         }
+
+         visited.insert(issue_id);
+         current_chain.push(issue_id);
+
+         if current_chain.len() > longest.len() {
+            *longest = current_chain.clone();
+         }
+
+         for issue_with_id in issues {
+            if issue_with_id.issue.metadata.depends_on.contains(&issue_id) {
+               find_chain(issue_with_id.id, issues, visited, current_chain, longest);
+            }
+         }
+
+         current_chain.pop();
+         visited.remove(&issue_id);
+      }
+
+      for issue_with_id in &issues {
+         let mut current_chain = Vec::new();
+         find_chain(
+            issue_with_id.id,
+            &issues,
+            &mut visited,
+            &mut current_chain,
+            &mut longest_chain,
+         );
+      }
+
+      let chain_details: Vec<_> = longest_chain
+         .iter()
+         .filter_map(|&id| issue_map.get(&id).copied())
+         .map(|i| {
+            serde_json::json!({
+                "num": i.id,
+                "title": i.issue.metadata.title,
+                "status": i.issue.metadata.status.to_string(),
+                "priority": i.issue.metadata.priority.to_string(),
+            })
+         })
+         .collect();
+
+      let output = serde_json::json!({
+          "length": longest_chain.len(),
+          "chain": chain_details,
+      });
+
+      Ok(CallToolResult::success(vec![Content::text(
+         serde_json::to_string_pretty(&output).unwrap(),
+      )]))
+   }
+
+   #[tool(name = "issues_deps_graph", description = "Visualize dependency graph")]
+   async fn deps_graph(
+      &self,
+      Parameters(request): Parameters<DepsGraphRequest>,
+   ) -> Result<CallToolResult, McpError> {
+      let issues = self.storage.list_open_issues().map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to list issues: {}", e)),
+         data:    None,
+      })?;
+
+      if issues.is_empty() {
+         return Ok(CallToolResult::success(vec![Content::text("[]".to_string())]));
+      }
+
+      let issue_map: std::collections::HashMap<u32, &crate::issue::IssueWithId> =
+         issues.iter().map(|i| (i.id, i)).collect();
+
+      let relevant_issues: Vec<u32> = if let Some(ref_str) = request.issue {
+         let focus_num = self
+            .storage
+            .resolve_bug_ref(&ref_str)
+            .map_err(|e| McpError {
+               code:    ErrorCode(-32602),
+               message: Cow::from(format!("Invalid bug ref: {}", e)),
+               data:    None,
+            })?;
+
+         let mut result = std::collections::HashSet::new();
+         let mut to_visit = vec![focus_num];
+
+         while let Some(id) = to_visit.pop() {
+            if result.contains(&id) {
+               continue;
+            }
+            result.insert(id);
+
+            if let Some(issue_with_id) = issues.iter().find(|i| i.id == id) {
+               for &dep in &issue_with_id.issue.metadata.depends_on {
+                  if !result.contains(&dep) {
+                     to_visit.push(dep);
+                  }
+               }
+            }
+
+            for issue_with_id in &issues {
+               if issue_with_id.issue.metadata.depends_on.contains(&id)
+                  && !result.contains(&issue_with_id.id)
+               {
+                  to_visit.push(issue_with_id.id);
+               }
+            }
+         }
+
+         let mut vec: Vec<_> = result.into_iter().collect();
+         vec.sort();
+         vec
+      } else {
+         issues.iter().map(|i| i.id).collect()
+      };
+
+      let graph_data: Vec<_> = relevant_issues
+         .iter()
+         .filter_map(|&id| issue_map.get(&id))
+         .map(|i| {
+            serde_json::json!({
+                "id": i.id,
+                "title": i.issue.metadata.title,
+                "status": i.issue.metadata.status.to_string(),
+                "depends_on": i.issue.metadata.depends_on,
+            })
+         })
+         .collect();
+
+      Ok(CallToolResult::success(vec![Content::text(
+         serde_json::to_string_pretty(&graph_data).unwrap(),
+      )]))
+   }
+
+   #[tool(name = "issues_metrics", description = "Show performance metrics")]
+   async fn metrics(
+      &self,
+      Parameters(request): Parameters<MetricsRequest>,
+   ) -> Result<CallToolResult, McpError> {
+      use chrono::{Duration, Utc};
+      use std::collections::HashMap;
+
+      let period = request.period.as_deref().unwrap_or("week");
+
+      let open_issues = self.storage.list_open_issues().map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to list issues: {}", e)),
+         data:    None,
+      })?;
+
+      let closed_issues = self.storage.list_closed_issues().map_err(|e| McpError {
+         code:    ErrorCode(-32603),
+         message: Cow::from(format!("Failed to list closed issues: {}", e)),
+         data:    None,
+      })?;
+
+      let now = Utc::now();
+      let since = match period {
+         "day" => now - Duration::days(1),
+         "week" => now - Duration::weeks(1),
+         "month" => now - Duration::days(30),
+         "all" => Utc::now() - Duration::days(36500),
+         _ => {
+            return Err(McpError {
+               code:    ErrorCode(-32602),
+               message: Cow::from("Invalid period: use day, week, month, or all"),
+               data:    None,
+            })
+         },
+      };
+
+      let closed_in_period: Vec<_> = closed_issues
+         .iter()
+         .filter(|i| {
+            if let Some(closed_time) = i.issue.metadata.closed {
+               closed_time > since
+            } else {
+               false
+            }
+         })
+         .collect();
+
+      let opened_in_period: Vec<_> = open_issues
+         .iter()
+         .chain(closed_issues.iter())
+         .filter(|i| i.issue.metadata.created > since)
+         .collect();
+
+      let mut close_times = Vec::new();
+      for i in &closed_in_period {
+         if let Some(closed) = i.issue.metadata.closed {
+            let duration = closed - i.issue.metadata.created;
+            close_times.push(duration.num_hours());
+         }
+      }
+
+      let avg_close_time = if !close_times.is_empty() {
+         close_times.iter().sum::<i64>() / close_times.len() as i64
+      } else {
+         0
+      };
+
+      let mut priority_counts = HashMap::new();
+      for i in &open_issues {
+         *priority_counts
+            .entry(i.issue.metadata.priority)
+            .or_insert(0) += 1;
+      }
+
+      let mut status_counts = HashMap::new();
+      for i in &open_issues {
+         *status_counts.entry(i.issue.metadata.status).or_insert(0) += 1;
+      }
+
+      let output = serde_json::json!({
+          "period": period,
+          "total_open": open_issues.len(),
+          "total_closed": closed_issues.len(),
+          "opened_in_period": opened_in_period.len(),
+          "closed_in_period": closed_in_period.len(),
+          "avg_close_time_hours": avg_close_time,
+          "by_priority": {
+              "critical": priority_counts.get(&Priority::Critical).unwrap_or(&0),
+              "high": priority_counts.get(&Priority::High).unwrap_or(&0),
+              "medium": priority_counts.get(&Priority::Medium).unwrap_or(&0),
+              "low": priority_counts.get(&Priority::Low).unwrap_or(&0),
+          },
+          "by_status": {
+              "open": status_counts.get(&Status::NotStarted).unwrap_or(&0),
+              "active": status_counts.get(&Status::InProgress).unwrap_or(&0),
+              "blocked": status_counts.get(&Status::Blocked).unwrap_or(&0),
+              "backlog": status_counts.get(&Status::Backlog).unwrap_or(&0),
+          },
+      });
+
+      Ok(CallToolResult::success(vec![Content::text(
+         serde_json::to_string_pretty(&output).unwrap(),
       )]))
    }
 }

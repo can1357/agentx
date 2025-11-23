@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use colored::Colorize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use smol_str::SmolStr;
 
@@ -13,6 +14,52 @@ use crate::{
    storage::Storage,
    utils::parse_effort,
 };
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IssueListResult {
+   pub status: String,
+   pub count:  usize,
+   pub issues: Vec<IssueWithId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextResult {
+   pub active:         Vec<IssueWithId>,
+   pub blocked:        Vec<IssueWithId>,
+   pub high_priority:  Vec<IssueWithId>,
+   pub ready_to_start: Vec<IssueWithId>,
+   pub total_open:     usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShowResult {
+   pub num:            u32,
+   pub title:          String,
+   pub priority:       String,
+   pub status:         String,
+   pub body:           String,
+   pub tags:           Vec<String>,
+   pub files:          Vec<String>,
+   pub effort:         Option<String>,
+   pub created:        DateTime<Utc>,
+   pub started:        Option<DateTime<Utc>>,
+   pub closed:         Option<DateTime<Utc>>,
+   pub blocked_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateIssueResult {
+   pub bug_num: u32,
+   pub title:   String,
+   pub path:    String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StatusUpdateResult {
+   pub bug_num: u32,
+   pub status:  String,
+   pub message: Option<String>,
+}
 
 #[derive(Debug, Clone)]
 pub struct Commands {
@@ -29,15 +76,26 @@ impl Commands {
       &self.config
    }
 
-   pub fn list(&self, status: &str, verbose: bool, json: bool) -> Result<()> {
+   pub fn list_data(&self, status: &str) -> Result<IssueListResult> {
       let issues = match status {
          "open" => self.storage.list_open_issues()?,
          "closed" => self.storage.list_closed_issues()?,
          _ => anyhow::bail!("Invalid status: {status}"),
       };
 
+      Ok(IssueListResult {
+         status: status.to_string(),
+         count:  issues.len(),
+         issues,
+      })
+   }
+
+   pub fn list(&self, status: &str, verbose: bool, json: bool) -> Result<()> {
+      let result = self.list_data(status)?;
+
       if json {
-         let data: Vec<_> = issues
+         let data: Vec<_> = result
+            .issues
             .iter()
             .map(|issue_with_id| {
                json!({
@@ -56,15 +114,16 @@ impl Commands {
          return Ok(());
       }
 
-      if issues.is_empty() {
-         println!("No {status} issues found");
+      if result.issues.is_empty() {
+         println!("No {} issues found", result.status);
          return Ok(());
       }
 
       let use_colors = self.config.colored_output;
 
       // Separate backlog from active issues
-      let (active_issues, backlog_issues): (Vec<_>, Vec<_>) = issues
+      let (active_issues, backlog_issues): (Vec<_>, Vec<_>) = result
+         .issues
          .iter()
          .partition(|issue_with_id| issue_with_id.issue.metadata.status != Status::Backlog);
 
@@ -234,6 +293,26 @@ impl Commands {
       Ok(())
    }
 
+   pub fn show_data(&self, bug_ref: &str) -> Result<ShowResult> {
+      let bug_num = self.storage.resolve_bug_ref(bug_ref)?;
+      let issue = self.storage.load_issue(bug_num)?;
+
+      Ok(ShowResult {
+         num:            bug_num,
+         title:          issue.metadata.title.to_string(),
+         priority:       issue.metadata.priority.to_string(),
+         status:         issue.metadata.status.to_string(),
+         body:           issue.body.clone(),
+         tags:           issue.metadata.tags.iter().map(|s| s.to_string()).collect(),
+         files:          issue.metadata.files.iter().map(|s| s.to_string()).collect(),
+         effort:         issue.metadata.effort.as_ref().map(|s| s.to_string()),
+         created:        issue.metadata.created,
+         started:        issue.metadata.started,
+         closed:         issue.metadata.closed,
+         blocked_reason: issue.metadata.blocked_reason.as_ref().map(|s| s.to_string()),
+      })
+   }
+
    pub fn show(&self, bug_ref: &str, json: bool) -> Result<()> {
       let bug_num = self.storage.resolve_bug_ref(bug_ref)?;
       let issue = self.storage.load_issue(bug_num)?;
@@ -249,6 +328,40 @@ impl Commands {
       }
 
       Ok(())
+   }
+
+   #[allow(clippy::too_many_arguments)]
+   pub fn create_issue_data(
+      &self,
+      title: String,
+      priority_str: &str,
+      tags: Vec<String>,
+      files: Vec<String>,
+      issue: String,
+      impact: String,
+      acceptance: String,
+      effort: Option<String>,
+      context: Option<String>,
+   ) -> Result<CreateIssueResult> {
+      let priority = match priority_str {
+         "critical" => Priority::Critical,
+         "high" => Priority::High,
+         "medium" => Priority::Medium,
+         "low" => Priority::Low,
+         _ => anyhow::bail!("Invalid priority: {priority_str}"),
+      };
+
+      let bug_num = self.storage.next_bug_number()?;
+      let issue_obj =
+         Issue::new(title.clone(), priority, tags, files, issue, impact, acceptance, effort, context);
+
+      let path = self.storage.save_issue(&issue_obj, bug_num, true)?;
+
+      Ok(CreateIssueResult {
+         bug_num,
+         title,
+         path: path.display().to_string(),
+      })
    }
 
    #[allow(clippy::too_many_arguments)]
@@ -324,6 +437,21 @@ impl Commands {
       Ok(())
    }
 
+   pub fn start_data(&self, bug_ref: &str) -> Result<StatusUpdateResult> {
+      let bug_num = self.storage.resolve_bug_ref(bug_ref)?;
+
+      self.storage.update_issue_metadata(bug_num, |meta| {
+         meta.status = Status::InProgress;
+         meta.started = Some(Utc::now());
+      })?;
+
+      Ok(StatusUpdateResult {
+         bug_num,
+         status:  "in_progress".to_string(),
+         message: None,
+      })
+   }
+
    pub fn start(
       &self,
       bug_ref: &str,
@@ -395,6 +523,21 @@ impl Commands {
       Ok(())
    }
 
+   pub fn block_data(&self, bug_ref: &str, reason: String) -> Result<StatusUpdateResult> {
+      let bug_num = self.storage.resolve_bug_ref(bug_ref)?;
+
+      self.storage.update_issue_metadata(bug_num, |meta| {
+         meta.status = Status::Blocked;
+         meta.blocked_reason = Some(reason.clone().into());
+      })?;
+
+      Ok(StatusUpdateResult {
+         bug_num,
+         status:  "blocked".to_string(),
+         message: Some(reason),
+      })
+   }
+
    pub fn block(&self, bug_ref: &str, reason: String, json: bool) -> Result<()> {
       let bug_num = self.storage.resolve_bug_ref(bug_ref)?;
 
@@ -415,6 +558,106 @@ impl Commands {
       }
 
       Ok(())
+   }
+
+   pub fn close_data(&self, bug_ref: &str, message: Option<String>) -> Result<StatusUpdateResult> {
+      let bug_num = self.storage.resolve_bug_ref(bug_ref)?;
+
+      self.storage.update_issue_metadata(bug_num, |meta| {
+         meta.status = Status::Closed;
+         meta.closed = Some(Utc::now());
+      })?;
+
+      if let Some(note) = &message {
+         let mut issue = self.storage.load_issue(bug_num)?;
+         issue.body.push_str(&format!("\n\n## Closed\n\n{}", note));
+         self.storage.save_issue(&issue, bug_num, false)?;
+      }
+
+      Ok(StatusUpdateResult {
+         bug_num,
+         status: "closed".to_string(),
+         message,
+      })
+   }
+
+   pub fn open_data(&self, bug_ref: &str) -> Result<StatusUpdateResult> {
+      let bug_num = self.storage.resolve_bug_ref(bug_ref)?;
+
+      self.storage.update_issue_metadata(bug_num, |meta| {
+         meta.status = Status::NotStarted;
+         meta.closed = None;
+      })?;
+
+      self.storage.move_issue(bug_num, true)?;
+
+      Ok(StatusUpdateResult {
+         bug_num,
+         status:  "open".to_string(),
+         message: None,
+      })
+   }
+
+   pub fn defer_data(&self, bug_ref: &str) -> Result<StatusUpdateResult> {
+      let bug_num = self.storage.resolve_bug_ref(bug_ref)?;
+
+      self.storage.update_issue_metadata(bug_num, |meta| {
+         meta.status = Status::Backlog;
+      })?;
+
+      Ok(StatusUpdateResult {
+         bug_num,
+         status:  "backlog".to_string(),
+         message: None,
+      })
+   }
+
+   pub fn activate_data(&self, bug_ref: &str) -> Result<StatusUpdateResult> {
+      let bug_num = self.storage.resolve_bug_ref(bug_ref)?;
+
+      self.storage.update_issue_metadata(bug_num, |meta| {
+         meta.status = Status::NotStarted;
+      })?;
+
+      Ok(StatusUpdateResult {
+         bug_num,
+         status:  "open".to_string(),
+         message: None,
+      })
+   }
+
+   pub fn checkpoint_data(&self, bug_ref: &str, note: String) -> Result<StatusUpdateResult> {
+      let bug_num = self.storage.resolve_bug_ref(bug_ref)?;
+      let mut issue = self.storage.load_issue(bug_num)?;
+
+      let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+      issue
+         .body
+         .push_str(&format!("\n\n## Checkpoint - {}\n\n{}", timestamp, note));
+
+      let mut status_changed = false;
+      if note.starts_with("BLOCKED:") {
+         let reason = note.strip_prefix("BLOCKED:").unwrap_or("").trim().to_string();
+         self.storage.update_issue_metadata(bug_num, |meta| {
+            meta.status = Status::Blocked;
+            meta.blocked_reason = Some(reason.into());
+         })?;
+         status_changed = true;
+      } else if note.starts_with("DONE:") || note.starts_with("COMPLETED:") {
+         self.storage.update_issue_metadata(bug_num, |meta| {
+            meta.status = Status::Closed;
+            meta.closed = Some(Utc::now());
+         })?;
+         status_changed = true;
+      }
+
+      self.storage.save_issue(&issue, bug_num, false)?;
+
+      Ok(StatusUpdateResult {
+         bug_num,
+         status:  if status_changed { "updated".to_string() } else { "checkpoint_added".to_string() },
+         message: Some(note),
+      })
    }
 
    pub fn close(
@@ -646,67 +889,58 @@ impl Commands {
       Ok(())
    }
 
-   pub fn context(&self, json: bool) -> Result<()> {
+   pub fn context_data(&self) -> Result<ContextResult> {
       let issues = self.storage.list_open_issues()?;
-
-      if issues.is_empty() {
-         if json {
-            println!("{}", json!({"summary": "No open issues"}));
-         } else {
-            println!("No open issues");
-         }
-         return Ok(());
-      }
 
       let mut in_progress = Vec::new();
       let mut blocked = Vec::new();
       let mut high_priority = Vec::new();
       let mut ready = Vec::new();
 
-      for issue_with_id in &issues {
-         let item = json!({
-             "num": issue_with_id.id,
-             "title": issue_with_id.issue.metadata.title,
-             "priority": issue_with_id.issue.metadata.priority.to_string(),
-             "status": issue_with_id.issue.metadata.status.to_string(),
-         });
-
+      for issue_with_id in issues.iter() {
          match issue_with_id.issue.metadata.status {
-            Status::InProgress => in_progress.push(item),
-            Status::Blocked => {
-               let mut item = item;
-               if let Some(obj) = item.as_object_mut() {
-                  obj.insert(
-                     "blocked_reason".to_string(),
-                     json!(issue_with_id.issue.metadata.blocked_reason),
-                  );
-               }
-               blocked.push(item);
-            },
+            Status::InProgress => in_progress.push(issue_with_id.clone()),
+            Status::Blocked => blocked.push(issue_with_id.clone()),
             Status::NotStarted => {
                if matches!(
                   issue_with_id.issue.metadata.priority,
                   Priority::Critical | Priority::High
                ) {
-                  high_priority.push(item.clone());
+                  high_priority.push(issue_with_id.clone());
                }
-               ready.push(item);
+               ready.push(issue_with_id.clone());
             },
             _ => {},
          }
       }
 
+      Ok(ContextResult {
+         active: in_progress,
+         blocked,
+         high_priority,
+         ready_to_start: ready.into_iter().take(5).collect(),
+         total_open: issues.len(),
+      })
+   }
+
+   pub fn context(&self, json: bool) -> Result<()> {
+      let context_data = self.context_data()?;
+
       if json {
-         let output = json!({
-             "active": in_progress,
-             "blocked": blocked,
-             "high_priority": high_priority,
-             "ready_to_start": ready.iter().take(5).collect::<Vec<_>>(),
-             "total_open": issues.len(),
-         });
-         println!("{}", serde_json::to_string_pretty(&output)?);
+         println!("{}", serde_json::to_string_pretty(&context_data)?);
          return Ok(());
       }
+
+      if context_data.total_open == 0 {
+         println!("No open issues");
+         return Ok(());
+      }
+
+      let in_progress = &context_data.active;
+      let blocked = &context_data.blocked;
+      let high_priority = &context_data.high_priority;
+      let ready = &context_data.ready_to_start;
+      let total_open = context_data.total_open;
 
       println!("\n{}", "=".repeat(80));
       println!("CURRENT CONTEXT");
@@ -714,12 +948,11 @@ impl Commands {
 
       if !in_progress.is_empty() {
          println!("🔄 IN PROGRESS ({}):", in_progress.len());
-         for item in &in_progress {
-            let num = item["num"].as_u64().unwrap() as u32;
+         for issue_with_id in in_progress {
             println!(
                "   {}: {}",
-               self.config.format_issue_ref(num),
-               item["title"].as_str().unwrap()
+               self.config.format_issue_ref(issue_with_id.id),
+               issue_with_id.issue.metadata.title
             );
          }
          println!();
@@ -727,17 +960,14 @@ impl Commands {
 
       if !blocked.is_empty() {
          println!("🚫 BLOCKED ({}):", blocked.len());
-         for item in &blocked {
-            let num = item["num"].as_u64().unwrap() as u32;
+         for issue_with_id in blocked {
             println!(
                "   {}: {}",
-               self.config.format_issue_ref(num),
-               item["title"].as_str().unwrap()
+               self.config.format_issue_ref(issue_with_id.id),
+               issue_with_id.issue.metadata.title
             );
-            if let Some(reason) = item.get("blocked_reason")
-               && !reason.is_null()
-            {
-               println!("      → {}", reason.as_str().unwrap());
+            if let Some(reason) = &issue_with_id.issue.metadata.blocked_reason {
+               println!("      → {}", reason);
             }
          }
          println!();
@@ -745,13 +975,12 @@ impl Commands {
 
       if !high_priority.is_empty() {
          println!("⚠️  HIGH PRIORITY QUEUE ({}):", high_priority.len());
-         for item in &high_priority {
-            let num = item["num"].as_u64().unwrap() as u32;
+         for issue_with_id in high_priority {
             println!(
                "   [{}] {}: {}",
-               item["priority"].as_str().unwrap().to_uppercase(),
-               self.config.format_issue_ref(num),
-               item["title"].as_str().unwrap()
+               issue_with_id.issue.metadata.priority.to_string().to_uppercase(),
+               self.config.format_issue_ref(issue_with_id.id),
+               issue_with_id.issue.metadata.title
             );
          }
          println!();
@@ -759,12 +988,11 @@ impl Commands {
 
       if !ready.is_empty() {
          println!("✓ READY TO START ({} tasks):", ready.len());
-         for item in ready.iter().take(5) {
-            let num = item["num"].as_u64().unwrap() as u32;
+         for issue_with_id in ready.iter().take(5) {
             println!(
                "   {}: {}",
-               self.config.format_issue_ref(num),
-               item["title"].as_str().unwrap()
+               self.config.format_issue_ref(issue_with_id.id),
+               issue_with_id.issue.metadata.title
             );
          }
          if ready.len() > 5 {
@@ -773,7 +1001,7 @@ impl Commands {
          println!();
       }
 
-      println!("Total open issues: {}", issues.len());
+      println!("Total open issues: {}", total_open);
 
       Ok(())
    }

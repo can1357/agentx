@@ -150,14 +150,14 @@ pub struct IssueMetadata {
    pub blocks:         Vec<u32>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Issue {
    pub metadata: IssueMetadata,
    pub body:     String,
 }
 
 /// Issue with its ID (extracted from filename)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssueWithId {
    pub id:    u32,
    pub issue: Issue,

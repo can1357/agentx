@@ -245,13 +245,13 @@ impl SimpleMcpServer {
       let content = match name {
          "issues_list" => {
             let status = arguments["status"].as_str().unwrap_or("open");
-            match self.commands.list(status, false, true) {
-               Ok(_) => format!("Listed {} issues", status),
+            match self.commands.list_data(status) {
+               Ok(result) => serde_json::to_string_pretty(&result).unwrap_or_else(|e| format!("Error serializing: {}", e)),
                Err(e) => format!("Error: {}", e),
             }
          },
-         "issues_context" => match self.commands.context(true) {
-            Ok(_) => "Context retrieved".to_string(),
+         "issues_context" => match self.commands.context_data() {
+            Ok(result) => serde_json::to_string_pretty(&result).unwrap_or_else(|e| format!("Error: {}", e)),
             Err(e) => format!("Error: {}", e),
          },
          "issues_create" => {
@@ -261,7 +261,7 @@ impl SimpleMcpServer {
             let acceptance = arguments["acceptance"].as_str().unwrap_or("");
             let priority = arguments["priority"].as_str().unwrap_or("medium");
 
-            match self.commands.create_issue(
+            match self.commands.create_issue_data(
                title.to_string(),
                priority,
                vec![],
@@ -271,16 +271,15 @@ impl SimpleMcpServer {
                acceptance.to_string(),
                None,
                None,
-               true,
             ) {
-               Ok(_) => format!("Created issue: {}", title),
+               Ok(result) => serde_json::to_string_pretty(&result).unwrap_or_else(|e| format!("Error serializing: {}", e)),
                Err(e) => format!("Error: {}", e),
             }
          },
          "issues_show" => {
             let bug_ref = arguments["bug_ref"].as_str().unwrap_or("");
-            match self.commands.show(bug_ref, true) {
-               Ok(_) => format!("Showed issue: {}", bug_ref),
+            match self.commands.show_data(bug_ref) {
+               Ok(result) => serde_json::to_string_pretty(&result).unwrap_or_else(|e| format!("Error serializing: {}", e)),
                Err(e) => format!("Error: {}", e),
             }
          },
@@ -289,25 +288,26 @@ impl SimpleMcpServer {
             let status = arguments["status"].as_str().unwrap_or("");
             let reason = arguments["reason"].as_str().map(|s| s.to_string());
 
-            match status {
-               "start" => self.commands.start(bug_ref, false, false, true),
-               "block" => self
-                  .commands
-                  .block(bug_ref, reason.unwrap_or_default(), true),
-               "done" | "close" => self.commands.close(bug_ref, reason, false, false, true),
-               "reopen" => self.commands.open(bug_ref, true),
-               "defer" => self.commands.defer(bug_ref, true),
-               "activate" => self.commands.activate(bug_ref, true),
+            let result = match status {
+               "start" => self.commands.start_data(bug_ref),
+               "block" => self.commands.block_data(bug_ref, reason.unwrap_or_default()),
+               "done" | "close" => self.commands.close_data(bug_ref, reason),
+               "reopen" => self.commands.open_data(bug_ref),
+               "defer" => self.commands.defer_data(bug_ref),
+               "activate" => self.commands.activate_data(bug_ref),
                _ => Err(anyhow::anyhow!("Unknown status: {}", status)),
+            };
+
+            match result {
+               Ok(data) => serde_json::to_string_pretty(&data).unwrap_or_else(|e| format!("Error serializing: {}", e)),
+               Err(e) => format!("Error: {}", e),
             }
-            .map(|_| format!("Updated status to {} for {}", status, bug_ref))
-            .unwrap_or_else(|e| format!("Error: {}", e))
          },
          "issues_checkpoint" => {
             let bug_ref = arguments["bug_ref"].as_str().unwrap_or("");
             let note = arguments["note"].as_str().unwrap_or("");
-            match self.commands.checkpoint(bug_ref, note.to_string(), true) {
-               Ok(_) => format!("Added checkpoint to {}", bug_ref),
+            match self.commands.checkpoint_data(bug_ref, note.to_string()) {
+               Ok(result) => serde_json::to_string_pretty(&result).unwrap_or_else(|e| format!("Error serializing: {}", e)),
                Err(e) => format!("Error: {}", e),
             }
          },

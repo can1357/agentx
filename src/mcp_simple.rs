@@ -131,8 +131,8 @@ impl SimpleMcpServer {
                       "type": "object",
                       "properties": {
                           "bug_ref": {
-                              "type": "string",
-                              "description": "Bug reference (number or alias)"
+                              "type": "number",
+                              "description": "Bug reference number"
                           }
                       },
                       "required": ["bug_ref"]
@@ -145,8 +145,8 @@ impl SimpleMcpServer {
                       "type": "object",
                       "properties": {
                           "bug_ref": {
-                              "type": "string",
-                              "description": "Bug reference (number or alias)"
+                              "type": "number",
+                              "description": "Bug reference number"
                           },
                           "status": {
                               "type": "string",
@@ -168,8 +168,8 @@ impl SimpleMcpServer {
                       "type": "object",
                       "properties": {
                           "bug_ref": {
-                              "type": "string",
-                              "description": "Bug reference (number or alias)"
+                              "type": "number",
+                              "description": "Bug reference number"
                           },
                           "note": {
                               "type": "string",
@@ -270,30 +270,30 @@ impl SimpleMcpServer {
             ).map(|r| serde_json::to_value(r).unwrap_or_else(|_| json!({"error": "serialization failed"})))
          },
          "issues_show" => {
-            let bug_ref = arguments["bug_ref"].as_str().unwrap_or("");
-            self.commands.show_data(bug_ref).map(|r| serde_json::to_value(r).unwrap_or_else(|_| json!({"error": "serialization failed"})))
+            let bug_ref = arguments["bug_ref"].as_u64().map(|n| n.to_string()).unwrap_or_default();
+            self.commands.show_data(&bug_ref).map(|r| serde_json::to_value(r).unwrap_or_else(|_| json!({"error": "serialization failed"})))
          },
          "issues_status" => {
-            let bug_ref = arguments["bug_ref"].as_str().unwrap_or("");
+            let bug_ref = arguments["bug_ref"].as_u64().map(|n| n.to_string()).unwrap_or_default();
             let status = arguments["status"].as_str().unwrap_or("");
             let reason = arguments["reason"].as_str().map(|s| s.to_string());
 
             let data_result = match status {
-               "start" => self.commands.start_data(bug_ref),
-               "block" => self.commands.block_data(bug_ref, reason.unwrap_or_default()),
-               "done" | "close" => self.commands.close_data(bug_ref, reason),
-               "reopen" => self.commands.open_data(bug_ref),
-               "defer" => self.commands.defer_data(bug_ref),
-               "activate" => self.commands.activate_data(bug_ref),
+               "start" => self.commands.start_data(&bug_ref),
+               "block" => self.commands.block_data(&bug_ref, reason.unwrap_or_default()),
+               "done" | "close" => self.commands.close_data(&bug_ref, reason),
+               "reopen" => self.commands.open_data(&bug_ref),
+               "defer" => self.commands.defer_data(&bug_ref),
+               "activate" => self.commands.activate_data(&bug_ref),
                _ => Err(anyhow::anyhow!("Unknown status: {}", status)),
             };
 
             data_result.map(|r| serde_json::to_value(r).unwrap_or_else(|_| json!({"error": "serialization failed"})))
          },
          "issues_checkpoint" => {
-            let bug_ref = arguments["bug_ref"].as_str().unwrap_or("");
+            let bug_ref = arguments["bug_ref"].as_u64().map(|n| n.to_string()).unwrap_or_default();
             let note = arguments["note"].as_str().unwrap_or("");
-            self.commands.checkpoint_data(bug_ref, note.to_string()).map(|r| serde_json::to_value(r).unwrap_or_else(|_| json!({"error": "serialization failed"})))
+            self.commands.checkpoint_data(&bug_ref, note.to_string()).map(|r| serde_json::to_value(r).unwrap_or_else(|_| json!({"error": "serialization failed"})))
          },
          "issues_search" => {
             let query = arguments["query"].as_str().unwrap_or("");

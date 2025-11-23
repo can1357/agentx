@@ -242,17 +242,13 @@ impl SimpleMcpServer {
       let name = params["name"].as_str().unwrap_or("");
       let arguments = &params["arguments"];
 
-      let content = match name {
+      let result = match name {
          "issues_list" => {
             let status = arguments["status"].as_str().unwrap_or("open");
-            match self.commands.list_data(status) {
-               Ok(result) => serde_json::to_string_pretty(&result).unwrap_or_else(|e| format!("Error serializing: {}", e)),
-               Err(e) => format!("Error: {}", e),
-            }
+            self.commands.list_data(status).map(|r| serde_json::to_value(r).unwrap_or_else(|_| json!({"error": "serialization failed"})))
          },
-         "issues_context" => match self.commands.context_data() {
-            Ok(result) => serde_json::to_string_pretty(&result).unwrap_or_else(|e| format!("Error: {}", e)),
-            Err(e) => format!("Error: {}", e),
+         "issues_context" => {
+            self.commands.context_data().map(|r| serde_json::to_value(r).unwrap_or_else(|_| json!({"error": "serialization failed"})))
          },
          "issues_create" => {
             let title = arguments["title"].as_str().unwrap_or("");
@@ -261,7 +257,7 @@ impl SimpleMcpServer {
             let acceptance = arguments["acceptance"].as_str().unwrap_or("");
             let priority = arguments["priority"].as_str().unwrap_or("medium");
 
-            match self.commands.create_issue_data(
+            self.commands.create_issue_data(
                title.to_string(),
                priority,
                vec![],
@@ -271,24 +267,18 @@ impl SimpleMcpServer {
                acceptance.to_string(),
                None,
                None,
-            ) {
-               Ok(result) => serde_json::to_string_pretty(&result).unwrap_or_else(|e| format!("Error serializing: {}", e)),
-               Err(e) => format!("Error: {}", e),
-            }
+            ).map(|r| serde_json::to_value(r).unwrap_or_else(|_| json!({"error": "serialization failed"})))
          },
          "issues_show" => {
             let bug_ref = arguments["bug_ref"].as_str().unwrap_or("");
-            match self.commands.show_data(bug_ref) {
-               Ok(result) => serde_json::to_string_pretty(&result).unwrap_or_else(|e| format!("Error serializing: {}", e)),
-               Err(e) => format!("Error: {}", e),
-            }
+            self.commands.show_data(bug_ref).map(|r| serde_json::to_value(r).unwrap_or_else(|_| json!({"error": "serialization failed"})))
          },
          "issues_status" => {
             let bug_ref = arguments["bug_ref"].as_str().unwrap_or("");
             let status = arguments["status"].as_str().unwrap_or("");
             let reason = arguments["reason"].as_str().map(|s| s.to_string());
 
-            let result = match status {
+            let data_result = match status {
                "start" => self.commands.start_data(bug_ref),
                "block" => self.commands.block_data(bug_ref, reason.unwrap_or_default()),
                "done" | "close" => self.commands.close_data(bug_ref, reason),
@@ -298,23 +288,17 @@ impl SimpleMcpServer {
                _ => Err(anyhow::anyhow!("Unknown status: {}", status)),
             };
 
-            match result {
-               Ok(data) => serde_json::to_string_pretty(&data).unwrap_or_else(|e| format!("Error serializing: {}", e)),
-               Err(e) => format!("Error: {}", e),
-            }
+            data_result.map(|r| serde_json::to_value(r).unwrap_or_else(|_| json!({"error": "serialization failed"})))
          },
          "issues_checkpoint" => {
             let bug_ref = arguments["bug_ref"].as_str().unwrap_or("");
             let note = arguments["note"].as_str().unwrap_or("");
-            match self.commands.checkpoint_data(bug_ref, note.to_string()) {
-               Ok(result) => serde_json::to_string_pretty(&result).unwrap_or_else(|e| format!("Error serializing: {}", e)),
-               Err(e) => format!("Error: {}", e),
-            }
+            self.commands.checkpoint_data(bug_ref, note.to_string()).map(|r| serde_json::to_value(r).unwrap_or_else(|_| json!({"error": "serialization failed"})))
          },
          "issues_search" => {
             let query = arguments["query"].as_str().unwrap_or("");
             let status = arguments["status"].as_str().unwrap_or("open");
-            self.search_issues(query, status)
+            Ok(json!({"result": self.search_issues(query, status)}))
          },
          "issues_query" => {
             let tags: Vec<String> = arguments["tags"]
@@ -327,21 +311,30 @@ impl SimpleMcpServer {
                .unwrap_or_default();
             let priority = arguments["priority"].as_str();
             let status = arguments["status"].as_str();
-            self.query_issues(&tags, priority, status)
+            Ok(json!({"result": self.query_issues(&tags, priority, status)}))
          },
          "issues_wins" => {
             let threshold = arguments["threshold"].as_str().unwrap_or("1h");
-            self.find_quick_wins(threshold)
+            Ok(json!({"result": self.find_quick_wins(threshold)}))
          },
-         _ => format!("Unknown tool: {}", name),
+         _ => Err(anyhow::anyhow!("Unknown tool: {}", name)),
       };
 
-      json!({
-          "content": [{
-              "type": "text",
-              "text": content
-          }]
-      })
+      match result {
+         Ok(data) => json!({
+            "content": [{
+               "type": "text",
+               "text": serde_json::to_string_pretty(&data).unwrap_or_else(|_| "{}".to_string())
+            }]
+         }),
+         Err(e) => json!({
+            "content": [{
+               "type": "text",
+               "text": format!("Error: {}", e)
+            }],
+            "isError": true
+         }),
+      }
    }
 
    fn search_issues(&self, query: &str, status_filter: &str) -> String {
